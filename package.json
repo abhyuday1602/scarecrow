@@ -1,0 +1,74 @@
+{
+  "name": "@dumbduck/scarecrow",
+  "version": "0.2.0",
+  "description": "Scarecrow — synthetic user testing from the terminal. A persona does a real click-through of your site and reports the usability friction it hit. Works with Anthropic, Gemini, or Groq models.",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "crow": "./index.js"
+  },
+  "files": [
+    "index.js",
+    ".env.example",
+    "cli/",
+    "agent.js",
+    "browser.js",
+    "llm.js",
+    "personas.js",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "synthetic-user",
+    "usability",
+    "ux-testing",
+    "playwright",
+    "browser-automation",
+    "cli",
+    "llm",
+    "anthropic",
+    "gemini",
+    "groq",
+    "agent"
+  ],
+  "author": "abhyuday",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/abhyuday1602/scarecrow.git"
+  },
+  "homepage": "https://github.com/abhyuday1602/scarecrow#readme",
+  "bugs": {
+    "url": "https://github.com/abhyuday1602/scarecrow/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "prepublishOnly": "npm run lint && npm test",
+    "start": "node index.js",
+    "doctor": "node index.js doctor",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.104.0",
+    "axe-core": "^4.12.1",
+    "htm": "^3.1.1",
+    "ink": "^5.2.1",
+    "openai": "^6.0.0",
+    "playwright": "^1.61.0",
+    "react": "^18.3.1"
+  },
+  "engines": {
+    "node": "^20.19.0 || ^22.13.0 || >=24"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.6.0",
+    "vitest": "^4.1.9"
+  }
+}

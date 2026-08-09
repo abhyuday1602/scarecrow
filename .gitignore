@@ -1,0 +1,33 @@
+# dependencies
+node_modules/
+
+# secrets — never commit your API keys
+.env
+.env.*
+!.env.example
+.npmrc
+
+# generated run artifacts (screenshots + findings.json) — may hold page data,
+# and anything typed during a run (including credentials)
+runs/
+logs/
+
+# user-dropped upload test files may contain PII/credentials — keep only the README
+uploads/*
+!uploads/README.md
+
+# local working notes and internal design/audit docs — never published
+.dev/
+docs/
+opencode.json
+
+# build / test output
+*.tgz
+coverage/
+
+# misc
+*.log
+.DS_Store
+.claude/
+.vscode/
+.idea/
