@@ -1,8 +1,9 @@
 // cli/tui/app.js — the root of the interactive TUI, modeled on Claude Code: ONE persistent
-// full-height frame holding a scrolling transcript (our own scrollback model, paged with
-// PgUp/PgDn), a pinned input box, and themed header/footer bands. There are no full-screen
-// mode swaps: system messages, guided prompts, the confirm block, and finished runs all
-// append to the single transcript.
+// full-height frame holding a scrolling transcript, a pinned input box, and themed
+// header/footer bands. There are no full-screen mode swaps: system messages, guided
+// prompts, the confirm block, and finished runs all append to the single transcript,
+// rendered through Ink's <Static> so committed entries live in the terminal's own
+// scrollback (mouse wheel / search all work) instead of a hand-rolled paging model.
 //
 // Keyboard ownership is single: only the <Prompt> (when active) or the one open picker
 // handles keys. The global useInput below handles ONLY Ctrl+C and Esc — never letters — so
@@ -94,11 +95,18 @@ export function App({ ctx, initialSession }) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const { theme, themeName, switchTheme } = useTheme();
-  const { rows, cols } = useTermSize();
+  const { cols } = useTermSize();
 
   const [session, setSession] = useState(initialSession);
+  // Committed transcript entries. Rendered via Ink's <Static> below: each item is painted
+  // to the real terminal exactly once and then permanently excluded from future layout
+  // passes. That sidesteps a real Ink layout bug we hit here — an unboundedly-growing,
+  // justifyContent="flex-end" + overflow="hidden" region intermittently made Yoga compute
+  // overlapping row positions for sibling nodes, which Output.write() (character-stamping,
+  // no per-cell clear) then rendered as garbled/overlapping text. Static output never
+  // re-enters that layout pass, so it can't collide. It also means past output lives in
+  // the terminal's own scrollback now, not a hand-rolled one.
   const [scrollback, setScrollback] = useState([]);
-  const [scrollOffset, setScrollOffset] = useState(0); // 0 = pinned to latest at the bottom
   const [, setGen] = useState(0); // bump to force a re-render (used by clear())
   const [phase, setPhase] = useState("idle");
   const [postRun, setPostRun] = useState(false);
@@ -115,7 +123,6 @@ export function App({ ctx, initialSession }) {
   const phaseRef      = useRef(phase);      phaseRef.current      = phase;
   const overlayRef    = useRef(overlay);    overlayRef.current    = overlay;
   const collectingRef = useRef(collecting); collectingRef.current = collecting;
-  const scrollLenRef  = useRef(0);          scrollLenRef.current  = scrollback.length;
   const liveRef       = useRef(null);
   const cancelRef     = useRef(false);
   const abortRef      = useRef(null);
@@ -124,7 +131,7 @@ export function App({ ctx, initialSession }) {
   const id = () => ++idRef.current;
 
   const patchSession = (partial) => setSession((s) => ({ ...s, ...partial }));
-  const pushNode = (node) => { setScrollback((s) => [...s, { id: id(), node }]); setScrollOffset(0); };
+  const pushNode = (node) => setScrollback((s) => [...s, { id: id(), node }]);
   const message  = (text, color) => pushNode(html`<Text color=${color}>${text}</Text>`);
   const error    = (text) => pushNode(html`<Text color=${theme.error}>${text}</Text>`);
 
@@ -267,7 +274,6 @@ export function App({ ctx, initialSession }) {
     const model = newRunModel(s.mode);
     liveRef.current = model;
     setPhase("running"); phaseRef.current = "running";
-    setScrollOffset(0);
     bump();
     const reporter = makeInkReporter(model, bump);
     let skipPostRun = false;
@@ -314,7 +320,7 @@ export function App({ ctx, initialSession }) {
       setPhase("idle"); phaseRef.current = "idle";
       cancelRef.current = false;
       if (!skipPostRun) {
-        pushNode(html`<${RunView} model=${finished} live=${false} />`);
+        pushNode(html`<${RunView} model=${finished} live=${false} cols=${cols} />`);
         setPostRun(true);
       }
       bump();
@@ -907,11 +913,6 @@ export function App({ ctx, initialSession }) {
       setTimeout(() => { ctrlCArmed.current = false; }, 1500);
       return;
     }
-    // History scroll through the transcript viewport (0 = pinned to the latest at bottom).
-    if (!overlayRef.current) {
-      if (key.pageUp)   { setScrollOffset((o) => Math.min(o + 1, Math.max(0, scrollLenRef.current - 1))); return; }
-      if (key.pageDown) { setScrollOffset((o) => Math.max(o - 1, 0)); return; }
-    }
     if (postRun && key.escape) { setPostRun(false); return; }
     if (phaseRef.current === "running" && key.escape) {
       if (!overlayRef.current) {
@@ -960,40 +961,42 @@ export function App({ ctx, initialSession }) {
   const isRunning   = phase === "running";
   const isOverlay   = !!overlay;
   const showWelcome = scrollback.length === 0 && !isRunning && !isOverlay && !collecting;
-  // Transcript items currently visible: hide the last `scrollOffset` (PgUp scrolls back).
-  const visible     = scrollback.slice(0, Math.max(0, scrollback.length - scrollOffset));
   const centerMid   = showWelcome || isOverlay;
+  // The CONFIRM box (also in scrollback) already shows the goal — don't repeat it above
+  // the input while it's on screen.
+  const showGoalHint = collecting && !collecting.confirmMode;
 
-  // ── Fixed fullscreen frame: sticky Header · scrolling viewport · sticky search bar ──
-  // Fill the whole terminal so Ink consistently uses its full-screen clear (\x1b[2J) path
-  // every frame; hovering just under `rows` makes it oscillate between clear and
-  // incremental erase, which leaves ghost cells.
+  // ── Sticky Header · live viewport · sticky input bar ──
+  // Deliberately un-pinned height: Ink only takes its cheap "print just the new static
+  // output" path when the dynamic frame's height is naturally under the terminal's row
+  // count. Forcing this Box to fill every row would instead push every render onto Ink's
+  // full-clear path, which reprints the *entire* accumulated static history each time —
+  // catastrophic once the Static block above has any real transcript in it.
   return html`
-    <Box flexDirection="column" width=${cols} height=${rows}>
+    <Box flexDirection="column" width=${cols}>
+      <Static items=${scrollback}>
+        ${(item) => html`<Box key=${item.id} flexDirection="column" marginBottom=${1} width=${cols} paddingX=${1}>${item.node}</Box>`}
+      </Static>
+
       <${Header} theme=${theme} version=${ctx.version || "0.0.0"} session=${session} cols=${cols} />
 
       <Box flexGrow=${1} flexDirection="column" overflow="hidden" paddingX=${1}
            justifyContent=${centerMid ? "center" : "flex-end"}
            alignItems=${centerMid ? "center" : "stretch"}>
 
-        ${showWelcome ? html`<${Welcome} theme=${theme} cols=${cols} />` : null}
+        ${showWelcome ? html`<${Welcome} key="welcome" theme=${theme} cols=${cols} />` : null}
 
-        ${isOverlay ? renderOverlay() : null}
+        ${isOverlay ? html`<Box key="overlay">${renderOverlay()}</Box>` : null}
 
-        ${!centerMid ? html`
-          <Box flexDirection="column">
-            ${visible.map((item) => html`<Box key=${item.id} flexDirection="column" marginBottom=${1}>${item.node}</Box>`)}
-            ${isRunning ? html`
-              <Box flexDirection="column">
-                <${RunView} model=${liveRef.current} live=${true} />
-                <Box marginTop=${1}><Text dimColor>running… </Text><Text color=${theme.warning}>Esc</Text><Text dimColor> to stop</Text></Box>
-              </Box>` : null}
-            ${scrollOffset > 0 ? html`<Box><Text dimColor>▲ ${scrollOffset} newer below · PgDn to catch up</Text></Box>` : null}
+        ${!centerMid && isRunning ? html`
+          <Box key="live" flexDirection="column">
+            <${RunView} model=${liveRef.current} live=${true} cols=${cols} />
+            <Box marginTop=${1}><Text dimColor>running… </Text><Text color=${theme.warning}>Esc</Text><Text dimColor> to stop</Text></Box>
           </Box>` : null}
       </Box>
 
       <Box flexShrink=${0} flexDirection="column" paddingX=${1}>
-        ${collecting ? html`
+        ${showGoalHint ? html`
           <Box marginBottom=${1}><Text dimColor>goal: </Text><Text>${collecting.goal || "(none)"}</Text></Box>` : null}
         <${Prompt} key=${collectingField || "prompt"} active=${!isRunning && !isOverlay} onSubmit=${onSubmit} onShiftTab=${cycleMode} history=${history} collecting=${collectingField} postRun=${postRun} loadedGoal=${session.task || ""} />
         <${StatusFooter} theme=${theme} session=${session} collecting=${!!collecting} postRun=${postRun} cols=${cols} />

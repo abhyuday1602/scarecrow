@@ -98,12 +98,12 @@ export function Picker({ title, items, initial, onPick, onCancel, onHighlight, f
 
   return html`
     <Box flexDirection="column" borderStyle="round" borderColor=${theme.accent} paddingX=${2} paddingY=${1} width=${60}>
-      <Box marginBottom=${1}>
+      <Box key="title" marginBottom=${1}>
         <Text color=${theme.accent} bold>${title}</Text>
       </Box>
-      ${filterable ? html`<Box marginBottom=${1}><Text color=${theme.muted}>⌕ </Text><Text>${query}</Text><Text inverse> </Text></Box>` : null}
-      ${!hasSelectable ? html`<Text color=${theme.muted}>${filterable && q ? "(no matches)" : "(nothing to choose)"}</Text>` : null}
-      ${winStart > 0 ? html`<Text color=${theme.muted}>  ↑ ${winStart} more</Text>` : null}
+      ${filterable ? html`<Box key="query" marginBottom=${1}><Text color=${theme.muted}>⌕ </Text><Text>${query}</Text><Text inverse> </Text></Box>` : null}
+      ${!hasSelectable ? html`<Text key="empty" color=${theme.muted}>${filterable && q ? "(no matches)" : "(nothing to choose)"}</Text>` : null}
+      ${winStart > 0 ? html`<Text key="more-above" color=${theme.muted}>  ↑ ${winStart} more</Text>` : null}
       ${visible.map((it, vi) => {
         const i = winStart + vi;
         if (it.value === undefined) {
@@ -111,11 +111,11 @@ export function Picker({ title, items, initial, onPick, onCancel, onHighlight, f
         }
         return html`
           <Text key=${it.value} color=${i === idx ? theme.accent : undefined}>
-            ${i === idx ? "❯" : " "} ${it.group ? "  " : ""}${it.label}${it.hint ? html`  <Text color=${theme.muted}>${it.hint}</Text>` : ""}
+            ${i === idx ? "❯" : " "} ${it.group ? "  " : ""}${it.label}${it.hint ? html`  <Text key="hint" color=${theme.muted}>${it.hint}</Text>` : ""}
           </Text>`;
       })}
-      ${winStart + MAX_VISIBLE < view.length ? html`<Text color=${theme.muted}>  ↓ ${view.length - winStart - MAX_VISIBLE} more</Text>` : null}
-      <Box marginTop=${1}><Text color=${theme.muted}>${filterable ? "type to filter · " : ""}↑/↓ move · ↵ select · esc cancel</Text></Box>
+      ${winStart + MAX_VISIBLE < view.length ? html`<Text key="more-below" color=${theme.muted}>  ↓ ${view.length - winStart - MAX_VISIBLE} more</Text>` : null}
+      <Box key="hints" marginTop=${1}><Text color=${theme.muted}>${filterable ? "type to filter · " : ""}↑/↓ move · ↵ select · esc cancel</Text></Box>
     </Box>`;
 }
 

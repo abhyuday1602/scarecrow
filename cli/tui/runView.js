@@ -8,7 +8,6 @@ import { Box, Text } from "ink";
 import { html } from "./html.js";
 import { useTheme } from "./themeProvider.js";
 
-const HR = "─".repeat(60);
 // Semantic status colors, derived from the active theme so severity/verdict track the palette.
 const sevColors = (t) => ({ high: t.error, medium: t.warning, low: t.success });
 const verdictColors = (t) => ({ yes: t.success, unsure: t.warning, no: t.error });
@@ -106,9 +105,12 @@ export function A11y({ results, theme }) {
 
 // --- RunView: single-pane view for both the live run and the frozen scrollback snapshot ---
 
-export function RunView({ model, live }) {
+export function RunView({ model, live, cols = 60 }) {
   const { theme } = useTheme();
   const h = model.header;
+  // Match the header/footer bars' full-width feel instead of a fixed 60-char rule that
+  // reads as a narrow strip floating on a wide terminal.
+  const HR = "─".repeat(Math.max(1, cols - 2));
   return html`
     <${Box} flexDirection="column" marginTop=${1}>
       ${h ? html`
