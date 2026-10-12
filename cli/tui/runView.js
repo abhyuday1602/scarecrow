@@ -1,7 +1,7 @@
 // cli/tui/runView.js — the Ink rendering of a run, driven by the model that
-// cli/tui/inkReporter.js builds. The same <RunView> renders both the in-progress run
-// (live=true, shows the spinner) and the frozen snapshot committed to the transcript when
-// the run ends (live=false). It's the Ink analogue of cli/render.js.
+// cli/tui/inkReporter.js builds. <LiveRunView> is the in-progress run, clamped to a line
+// budget so the live frame never outgrows the terminal; <RunView> is the full, frozen
+// snapshot committed to the transcript when the run ends. The Ink analogue of cli/render.js.
 
 import { useState, useEffect } from "react";
 import { Box, Text } from "ink";
@@ -19,7 +19,7 @@ export function Spinner({ label }) {
     const id = setInterval(() => setI((x) => (x + 1) % FRAMES.length), 80);
     return () => clearInterval(id);
   }, []);
-  return html`<${Text} dimColor>  ${FRAMES[i]} ${label}<//>`;
+  return html`<${Text} dimColor wrap="truncate-end">  ${FRAMES[i]} ${label}<//>`;
 }
 
 export function Banner() {
@@ -103,9 +103,88 @@ export function A11y({ results, theme }) {
     <//>`;
 }
 
-// --- RunView: single-pane view for both the live run and the frozen scrollback snapshot ---
+// Greedy word-wrap to `width` columns (all our run text is single-width); words longer
+// than a line are hard-split. Always returns at least one line per paragraph.
+function wrapText(text, width) {
+  const out = [];
+  for (const para of String(text).split("\n")) {
+    let line = "";
+    for (let word of para.split(/\s+/).filter(Boolean)) {
+      while (word.length > width) {
+        if (line) { out.push(line); line = ""; }
+        out.push(word.slice(0, width)); word = word.slice(width);
+      }
+      if (!word) continue;
+      if (line && line.length + 1 + word.length > width) { out.push(line); line = word; }
+      else line = line ? `${line} ${word}` : word;
+    }
+    out.push(line);
+  }
+  return out;
+}
 
-export function RunView({ model, live, cols = 60 }) {
+// --- LiveRunView: the in-progress run, as at most `maxLines` terminal rows ---
+// Everything is flattened into single-row <Text wrap="truncate-end"> lines (streamed text
+// is pre-wrapped to the width), so the row count is exact and we can keep just the tail.
+// The live frame must stay shorter than the terminal: once it's as tall as the screen,
+// Ink falls back to clearing the terminal and reprinting the whole <Static> transcript on
+// every render — i.e. every spinner tick. Earlier steps collapse to one-line summaries;
+// the complete run is committed to the transcript as a <RunView> when it ends.
+export function LiveRunView({ model, cols, maxLines }) {
+  const { theme } = useTheme();
+  const width = Math.max(10, cols - 2); // inside the viewport's paddingX=1
+  const lines = [];
+  const line = (content, props = {}) =>
+    lines.push(html`<${Text} key=${lines.length} wrap="truncate-end" ...${props}>${content}<//>`);
+  const para = (text, indent, props) => {
+    for (const l of wrapText(text, width - indent.length)) line(indent + l, props);
+  };
+
+  const h = model.header;
+  if (h) {
+    line([
+      html`<${Text} key="name" bold>${h.personaName}<//>`,
+      html`<${Text} key="ctx" dimColor>  ${h.url} · ${h.provider} · ${h.model}<//>`,
+    ]);
+  }
+  model.steps.forEach((s, i) => {
+    const current = i === model.steps.length - 1;
+    line(`── Step ${s.n}/${s.total}${s.action ? ` ── ${s.action}` : ""} ──`, { dimColor: true });
+    if (current && s.thought) para(s.thought, "  ", { dimColor: true });
+    if (s.result) {
+      if (current) para(`→ ${s.result}`, "  ", { dimColor: true });
+      else line(`  → ${s.result.replace(/\s+/g, " ")}`, { dimColor: true });
+    }
+  });
+  if (model.narrationActive) {
+    line("THINKING OUT LOUD", { color: theme.accent, bold: true });
+    if (model.narration) para(model.narration, "", { dimColor: true });
+  }
+  if (model.outcome) line(`session ended: ${model.outcome}`, { dimColor: true });
+  if (model.debrief) {
+    line("DEBRIEF", { color: theme.accent, bold: true });
+    if (model.debrief.text) para(model.debrief.text, "", { dimColor: true });
+  }
+  if (model.findings) {
+    const n = model.findings.findings?.length ?? 0;
+    line(`findings ready — ${n} issue${n === 1 ? "" : "s"}`, { color: theme.accent });
+  } else if (model.rawFindings) {
+    line("(couldn't parse findings — raw output in the report)", { color: theme.warning });
+  }
+  if (model.phase) lines.push(html`<${Spinner} key="spinner" label=${model.phase} />`);
+
+  const budget = Math.max(2, maxLines);
+  const hidden = lines.length - budget;
+  const shown = hidden > 0
+    ? [html`<${Text} key="more" dimColor wrap="truncate-end">  ↑ ${hidden + 1} earlier lines · the full run prints when it ends<//>`,
+       ...lines.slice(hidden + 1)]
+    : lines;
+  return html`<${Box} flexDirection="column">${shown}<//>`;
+}
+
+// --- RunView: the frozen, complete snapshot of a finished run (committed to scrollback) ---
+
+export function RunView({ model, cols = 60 }) {
   const { theme } = useTheme();
   const h = model.header;
   // Match the header/footer bars' full-width feel instead of a fixed 60-char rule that
@@ -143,8 +222,6 @@ export function RunView({ model, live, cols = 60 }) {
           <${Text} color=${theme.accent} bold>DEBRIEF<//>
           ${model.debrief.text ? html`<${Text} dimColor>${model.debrief.text}<//>` : null}
         <//>` : null}
-
-      ${live && model.phase ? html`<${Spinner} label=${model.phase} />` : null}
 
       ${model.findings ? html`<${Box} marginTop=${1}><${Findings} findings=${model.findings} /><//>`
         : model.rawFindings ? html`

@@ -1,26 +1,28 @@
-// cli/tui/app.js — the root of the interactive TUI, modeled on Claude Code: ONE persistent
-// full-height frame holding a scrolling transcript, a pinned input box, and themed
-// header/footer bands. There are no full-screen mode swaps: system messages, guided
-// prompts, the confirm block, and finished runs all append to the single transcript,
-// rendered through Ink's <Static> so committed entries live in the terminal's own
-// scrollback (mouse wheel / search all work) instead of a hand-rolled paging model.
+// cli/tui/app.js — the root of the interactive TUI, modeled on Claude Code: a transcript
+// rendered through Ink's <Static> (so committed entries live in the terminal's own
+// scrollback — mouse wheel / search all work), followed by a short live frame: the
+// in-progress run or open overlay, then the input box and a themed status footer. There
+// are no full-screen mode swaps: system messages, guided prompts and finished runs all
+// append to the single transcript. The live frame is kept shorter than the terminal (see
+// `budget` below) — at full height Ink would reprint the whole transcript every render.
 //
 // Keyboard ownership is single: only the <Prompt> (when active) or the one open picker
 // handles keys. The global useInput below handles ONLY Ctrl+C and Esc — never letters — so
 // typing can't trigger actions. Run output never touches stdout: runSession/runGlance are
 // handed an Ink reporter that writes into the live model.
 
-import { useState, useRef, useCallback } from "react";
-import { useApp, useInput, useStdout } from "ink";
+import { useState, useRef, useCallback, useEffect } from "react";
+import { useApp, useInput, useStdout, measureElement } from "ink";
 import { html } from "./html.js";
 import { useTermSize } from "./useTermSize.js";
 import { Prompt } from "./input.js";
-import { Banner, RunView } from "./runView.js";
+import { Banner, LiveRunView, RunView } from "./runView.js";
 import { Picker, PersonaAddForm, ProviderKeyForm, ConfirmDialog, ProfileCreateForm, StartingOllamaOverlay, PullProgressOverlay, OllamaInstallOverlay } from "./overlays.js";
 import { makeInkReporter, newRunModel } from "./inkReporter.js";
 import { COMMANDS, runSlash } from "./slash.js";
 import { useTheme } from "./themeProvider.js";
 import { THEME_NAMES, THEMES } from "./themes.js";
+import { resetStaticOutput } from "./inkStatic.js";
 
 import { collectInputs, cmdDoctor } from "../commands.js";
 import { runSession, runGlance } from "../session.js";
@@ -37,12 +39,22 @@ import { readdirSync, readFileSync } from "node:fs";
 
 const box = (color = "gray") => ({ flexDirection: "column", borderStyle: "round", borderColor: color, paddingX: 1 });
 
+// Rows the Welcome block needs with the full ANSI-Shadow wordmark (art 6 + tagline 2 +
+// copy 3 + margin 1); with less room it falls back to the one-line wordmark.
+const WELCOME_BANNER_ROWS = 12;
+// Picker chrome around its list rows: border 2 + paddingY 2 + title 2 + key hints 2 +
+// "N more" markers 2, plus 2 for the filter line when it's filterable.
+const pickerChrome = (filterable) => (filterable ? 12 : 10);
+// Static item id for the header band printed at the top of the transcript.
+const HEADER_ID = "header";
+
 // --- Welcome: compact header shown only when the transcript is empty and idle ---
-function Welcome({ theme, cols }) {
-  // The ANSI-Shadow wordmark is 75 cols wide; below that, fall back to the compact accent wordmark.
+function Welcome({ theme, cols, rows }) {
+  // The ANSI-Shadow wordmark is 75 cols wide; below that (or without the rows for it),
+  // fall back to the compact accent wordmark.
   return html`
     <Box flexDirection="column" marginBottom=${1}>
-      ${cols >= 78
+      ${cols >= 78 && rows >= WELCOME_BANNER_ROWS
         ? html`<${Banner} />`
         : html`<Text bold color=${theme.accent}>⬡ scarecrow</Text>`}
       <Box flexDirection="column" marginTop=${1}>
@@ -82,20 +94,39 @@ function StatusFooter({ theme, session, collecting, postRun, cols }) {
   return html`<${Bar} bg=${theme.surface} width=${cols - 2} left=${left} leftLen=${leftPlain.length} right=${right} rightLen=${rightPlain.length} />`;
 }
 
-// --- Header: slim, sticky top bar with the brand and current context, as a themed band ---
-function Header({ theme, version, session, cols }) {
-  const mode = session.mode || "walkthrough";
-  const rightPlain = `${mode}  ·  v${version} `;
+// --- Header: slim brand band, printed once at the top of the transcript (a <Static> item,
+// so it scrolls away with it). It can't update after printing, so the live context — mode,
+// provider, persona, URL — lives in the StatusFooter instead.
+function Header({ theme, version, cols }) {
+  const rightPlain = `v${version} `;
   const left  = html`<Text backgroundColor=${theme.surface}> <Text bold color=${theme.accent}>⬡ scarecrow</Text></Text>`;
   const right = html`<Text backgroundColor=${theme.surface} color=${theme.muted}>${rightPlain}</Text>`;
   return html`<${Bar} bg=${theme.surface} width=${cols} left=${left} leftLen=${" ⬡ scarecrow".length} right=${right} rightLen=${rightPlain.length} />`;
+}
+
+// --- ConfirmSession: the "ready to run" summary, shown in the live frame (not the
+// transcript) while the bar waits for ↵ / N, so it disappears once answered ---
+function ConfirmSession({ theme, goal, s }) {
+  return html`
+    <Box ...${box(theme.warning)}>
+      <Text bold>CONFIRM YOUR SESSION</Text>
+      <Text> </Text>
+      <Text><Text dimColor>Goal:     </Text>${goal || s.task || "(not set)"}</Text>
+      <Text><Text dimColor>URL:      </Text>${s.url || "(not set)"}</Text>
+      <Text><Text dimColor>Persona:  </Text>${s.personaKey || "(not set)"}</Text>
+      <Text><Text dimColor>Steps:    </Text>${s.steps}</Text>
+      <Text><Text dimColor>Mode:     </Text>${s.mode}</Text>
+      <Text><Text dimColor>Device:   </Text>${s.device}</Text>
+      <Text> </Text>
+      <Text dimColor>Press Enter to start the run, or N to cancel.</Text>
+    </Box>`;
 }
 
 export function App({ ctx, initialSession }) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const { theme, themeName, switchTheme } = useTheme();
-  const { cols } = useTermSize();
+  const { rows, cols } = useTermSize();
 
   const [session, setSession] = useState(initialSession);
   // Committed transcript entries. Rendered via Ink's <Static> below: each item is painted
@@ -107,7 +138,18 @@ export function App({ ctx, initialSession }) {
   // re-enters that layout pass, so it can't collide. It also means past output lives in
   // the terminal's own scrollback now, not a hand-rolled one.
   const [scrollback, setScrollback] = useState([]);
-  const [, setGen] = useState(0); // bump to force a re-render (used by clear())
+  // Remount key for <Static>. Static remembers how many items it has already printed, so
+  // after clear() empties `scrollback` an item pushed in the same batch (clear(); message())
+  // would fall below that index and never print. A fresh key resets it.
+  const [gen, setGen] = useState(0);
+  // A one-line, transient status above the input ("Press Ctrl+C again to exit.") — kept
+  // out of the transcript, which is permanent terminal scrollback.
+  const [notice, setNotice] = useState(null);
+  const noticeTimer = useRef(null);
+  // Measured height of the input area (goal hint · notice · slash menu · input · footer),
+  // used to budget how many rows the live frame above it may take.
+  const [chromeRows, setChromeRows] = useState(5);
+  const chromeRef = useRef(null);
   const [phase, setPhase] = useState("idle");
   const [postRun, setPostRun] = useState(false);
   const [overlay, setOverlay] = useState(null);
@@ -134,6 +176,13 @@ export function App({ ctx, initialSession }) {
   const pushNode = (node) => setScrollback((s) => [...s, { id: id(), node }]);
   const message  = (text, color) => pushNode(html`<Text color=${color}>${text}</Text>`);
   const error    = (text) => pushNode(html`<Text color=${theme.error}>${text}</Text>`);
+  // Show a transient notice; it clears itself after `ms` (0 = until replaced or cleared).
+  const notify = (text, color, ms = 2500) => {
+    clearTimeout(noticeTimer.current);
+    setNotice(text ? { text, color } : null);
+    if (text && ms) noticeTimer.current = setTimeout(() => setNotice(null), ms);
+  };
+  useEffect(() => () => clearTimeout(noticeTimer.current), []);
 
   // Best-effort "open this URL in the default browser" for TUI fallback prompts. `open`
   // (the previous implementation here) only exists on macOS; branch by platform the same
@@ -319,8 +368,9 @@ export function App({ ctx, initialSession }) {
       liveRef.current = null;
       setPhase("idle"); phaseRef.current = "idle";
       cancelRef.current = false;
+      notify(null); // drops "stopping after this step…" — the snapshot says "run cancelled"
       if (!skipPostRun) {
-        pushNode(html`<${RunView} model=${finished} live=${false} cols=${cols} />`);
+        pushNode(html`<${RunView} model=${finished} cols=${cols} />`);
         setPostRun(true);
       }
       bump();
@@ -337,24 +387,11 @@ export function App({ ctx, initialSession }) {
     if (nextIdx < col.queue.length) {
       setCollecting({ ...col, idx: nextIdx, goal });
     } else {
-      // All fields collected — append the confirmation to the transcript. Because there are
-      // no mode swaps, this box is visible with the input pinned beneath it.
+      // All fields collected — show the confirmation in the live frame, just above the
+      // input. It's not a transcript entry, so it goes away once answered.
       const s = { ...sessionRef.current, ...patchedValues };
-      pushNode(html`
-        <Box ...${box(theme.warning)}>
-          <Text bold>CONFIRM YOUR SESSION</Text>
-          <Text> </Text>
-          <Text><Text dimColor>Goal:     </Text>${goal || s.task || "(not set)"}</Text>
-          <Text><Text dimColor>URL:      </Text>${s.url || "(not set)"}</Text>
-          <Text><Text dimColor>Persona:  </Text>${s.personaKey || "(not set)"}</Text>
-          <Text><Text dimColor>Steps:    </Text>${s.steps}</Text>
-          <Text><Text dimColor>Mode:     </Text>${s.mode}</Text>
-          <Text><Text dimColor>Device:   </Text>${s.device}</Text>
-          <Text> </Text>
-          <Text dimColor>Press Enter to start the run, or N to go home.</Text>
-        </Box>`);
       // One-shot confirm handler: next input starts the run or cancels.
-      setCollecting({ queue: [], idx: 0, goal: goal || s.task, confirmMode: true });
+      setCollecting({ queue: [], idx: 0, goal: goal || s.task, confirmMode: true, summary: s });
     }
   };
 
@@ -378,11 +415,11 @@ export function App({ ctx, initialSession }) {
     const col = collectingRef.current;
     if (!col) return;
 
-    // Confirmation mode: any non-cancel text starts the run; /cancel or N aborts to home.
+    // Confirmation mode: any non-cancel text starts the run; /cancel or N cancels the setup
+    // (the transcript — e.g. the previous run's report — is left alone).
     if (col.confirmMode) {
       if (value === "/cancel" || value.toLowerCase() === "n") {
-        setCollecting(null);
-        clear();
+        cancelCollect();
         return;
       }
       setCollecting(null);
@@ -431,7 +468,7 @@ export function App({ ctx, initialSession }) {
 
   const cancelCollect = () => {
     setCollecting(null);
-    message("setup cancelled.", theme.warning);
+    notify("setup cancelled.", theme.warning);
   };
 
   // --- overlays (all render inline just above the input; the Prompt is unmounted while open) ---
@@ -709,8 +746,13 @@ export function App({ ctx, initialSession }) {
         <Text>  <Text color=${theme.accent}>Ctrl+C</Text>     <Text dimColor>stop a run, or exit</Text></Text>
       </Box>`);
   };
+  // Wipe the screen + scrollback and start a fresh transcript. Also empty Ink's own replay
+  // buffer of past <Static> output, or a later full-height repaint would print it all back.
   const clear = () => {
-    if (stdout) stdout.write("\x1b[2J\x1b[3J\x1b[H");
+    if (stdout) {
+      stdout.write("\x1b[2J\x1b[3J\x1b[H");
+      resetStaticOutput(stdout);
+    }
     setGen((g) => g + 1);
     setScrollback([]);
   };
@@ -900,7 +942,7 @@ export function App({ ctx, initialSession }) {
     if (cancelRef.current) return;
     cancelRef.current = true;
     abortRef.current?.abort();
-    message("stopping after this step…", theme.warning);
+    notify("stopping after this step…", theme.warning, 0);
   };
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
@@ -909,7 +951,7 @@ export function App({ ctx, initialSession }) {
       if (collectingRef.current) { cancelCollect(); return; }
       if (ctrlCArmed.current) { exit(); return; }
       ctrlCArmed.current = true;
-      message("Press Ctrl+C again to exit.", theme.warning);
+      notify("Press Ctrl+C again to exit.", theme.warning, 1500);
       setTimeout(() => { ctrlCArmed.current = false; }, 1500);
       return;
     }
@@ -929,7 +971,7 @@ export function App({ ctx, initialSession }) {
 
   const renderOverlay = () => {
     if (overlay.type === "pick")
-      return html`<${Picker} title=${overlay.title} items=${overlay.items} initial=${overlay.initial} filterable=${!!overlay.filterable} onPick=${overlay.onPick} onHighlight=${overlay.onHighlight} onCancel=${overlay.onCancel || (() => setOverlay(null))} />`;
+      return html`<${Picker} title=${overlay.title} items=${overlay.items} initial=${overlay.initial} filterable=${!!overlay.filterable} maxVisible=${budget - pickerChrome(!!overlay.filterable)} onPick=${overlay.onPick} onHighlight=${overlay.onHighlight} onCancel=${overlay.onCancel || (() => setOverlay(null))} />`;
     if (overlay.type === "persona-add")
       return html`<${PersonaAddForm} onSave=${(r) => { setOverlay(null); message(`added persona "${r.key}" (${r.name}) — select it with /persona ${r.key}`); }} onCancel=${() => setOverlay(null)} />`;
     if (overlay.type === "provider-key")
@@ -961,43 +1003,54 @@ export function App({ ctx, initialSession }) {
   const isRunning   = phase === "running";
   const isOverlay   = !!overlay;
   const showWelcome = scrollback.length === 0 && !isRunning && !isOverlay && !collecting;
-  const centerMid   = showWelcome || isOverlay;
-  // The CONFIRM box (also in scrollback) already shows the goal — don't repeat it above
-  // the input while it's on screen.
+  const centered    = showWelcome || isOverlay; // horizontally; the frame has no spare height
+  // The CONFIRM box already shows the goal — don't repeat it above the input.
   const showGoalHint = collecting && !collecting.confirmMode;
 
-  // ── Sticky Header · live viewport · sticky input bar ──
-  // Deliberately un-pinned height: Ink only takes its cheap "print just the new static
-  // output" path when the dynamic frame's height is naturally under the terminal's row
-  // count. Forcing this Box to fill every row would instead push every render onto Ink's
-  // full-clear path, which reprints the *entire* accumulated static history each time —
-  // catastrophic once the Static block above has any real transcript in it.
+  // Rows the live frame (welcome / overlay / confirm box / in-progress run) may use. Ink
+  // prints only the new <Static> lines while the whole dynamic frame stays shorter than
+  // the terminal; at full height it clears the screen and reprints the entire transcript
+  // on every render. So: terminal rows, minus the measured input area, minus a spare row
+  // for log-update's trailing newline.
+  const budget = Math.max(4, rows - chromeRows - 2);
+  useEffect(() => {
+    if (!chromeRef.current) return;
+    const { height } = measureElement(chromeRef.current);
+    if (height && height !== chromeRows) setChromeRows(height);
+  });
+
+  // ── Transcript (<Static>, header band first) · live frame · input area ──
+  // The root has no fixed height on purpose: see `budget` above.
+  const staticItems = [{ id: HEADER_ID }, ...scrollback];
   return html`
     <Box flexDirection="column" width=${cols}>
-      <Static items=${scrollback}>
-        ${(item) => html`<Box key=${item.id} flexDirection="column" marginBottom=${1} width=${cols} paddingX=${1}>${item.node}</Box>`}
+      <Static key=${gen} items=${staticItems}>
+        ${(item) => item.id === HEADER_ID
+          ? html`<Box key=${item.id} marginBottom=${1}><${Header} theme=${theme} version=${ctx.version || "0.0.0"} cols=${cols} /></Box>`
+          : html`<Box key=${item.id} flexDirection="column" marginBottom=${1} width=${cols} paddingX=${1}>${item.node}</Box>`}
       </Static>
 
-      <${Header} theme=${theme} version=${ctx.version || "0.0.0"} session=${session} cols=${cols} />
-
-      <Box flexGrow=${1} flexDirection="column" overflow="hidden" paddingX=${1}
-           justifyContent=${centerMid ? "center" : "flex-end"}
-           alignItems=${centerMid ? "center" : "stretch"}>
-
-        ${showWelcome ? html`<${Welcome} key="welcome" theme=${theme} cols=${cols} />` : null}
+      <Box flexDirection="column" paddingX=${1} alignItems=${centered ? "center" : "stretch"}>
+        ${showWelcome ? html`<${Welcome} key="welcome" theme=${theme} cols=${cols} rows=${budget} />` : null}
 
         ${isOverlay ? html`<Box key="overlay">${renderOverlay()}</Box>` : null}
 
-        ${!centerMid && isRunning ? html`
-          <Box key="live" flexDirection="column">
-            <${RunView} model=${liveRef.current} live=${true} cols=${cols} />
+        ${!isOverlay && collecting?.confirmMode ? html`
+          <Box key="confirm" marginBottom=${1}>
+            <${ConfirmSession} theme=${theme} goal=${collecting.goal} s=${collecting.summary} />
+          </Box>` : null}
+
+        ${!isOverlay && isRunning ? html`
+          <Box key="live" flexDirection="column" marginTop=${1}>
+            <${LiveRunView} model=${liveRef.current} cols=${cols} maxLines=${budget - 3} />
             <Box marginTop=${1}><Text dimColor>running… </Text><Text color=${theme.warning}>Esc</Text><Text dimColor> to stop</Text></Box>
           </Box>` : null}
       </Box>
 
-      <Box flexShrink=${0} flexDirection="column" paddingX=${1}>
+      <Box ref=${chromeRef} flexShrink=${0} flexDirection="column" paddingX=${1}>
         ${showGoalHint ? html`
           <Box marginBottom=${1}><Text dimColor>goal: </Text><Text>${collecting.goal || "(none)"}</Text></Box>` : null}
+        ${notice ? html`<Text color=${notice.color} wrap="truncate-end">${notice.text}</Text>` : null}
         <${Prompt} key=${collectingField || "prompt"} active=${!isRunning && !isOverlay} onSubmit=${onSubmit} onShiftTab=${cycleMode} history=${history} collecting=${collectingField} postRun=${postRun} loadedGoal=${session.task || ""} />
         <${StatusFooter} theme=${theme} session=${session} collecting=${!!collecting} postRun=${postRun} cols=${cols} />
       </Box>

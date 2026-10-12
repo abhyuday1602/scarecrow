@@ -87,7 +87,7 @@ export function Prompt({ active, onSubmit, onShiftTab, history = [], collecting 
   // Contextual placeholder while the bar is collecting a missing field
   const placeholder =
     postRun ? "Type a goal, or /home to start fresh" :
-    collecting === "__confirm__" ? "Press Enter to start the run, or N to go home" :
+    collecting === "__confirm__" ? "Press Enter to start the run, or N to cancel" :
     collecting === "url"     ? "Enter the URL to test…" :
     collecting === "task"    ? "What's the goal?" :
     collecting === "persona" ? "Which persona? (type a key, or ↵ to open picker)" :

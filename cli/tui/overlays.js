@@ -30,7 +30,10 @@ const matchesQuery = (it, q) =>
 //
 // onHighlight (optional): called with the current item's value on mount and whenever the
 // selection moves — used by the theme picker to preview a theme live as you arrow through it.
-export function Picker({ title, items, initial, onPick, onCancel, onHighlight, filterable = false }) {
+//
+// maxVisible: how many list rows to show at once. The App lowers it on short terminals so
+// the picker (plus the input bar beneath it) stays shorter than the screen.
+export function Picker({ title, items, initial, onPick, onCancel, onHighlight, filterable = false, maxVisible = 12 }) {
   const { theme } = useTheme();
   const [query, setQuery] = useState("");
 
@@ -89,7 +92,7 @@ export function Picker({ title, items, initial, onPick, onCancel, onHighlight, f
 
   // Long lists (e.g. a provider's live model listing) scroll inside a fixed window,
   // keeping the highlight centered where possible.
-  const MAX_VISIBLE = 12;
+  const MAX_VISIBLE = Math.max(3, maxVisible);
   const winStart = view.length <= MAX_VISIBLE
     ? 0
     : Math.max(0, Math.min(idx - Math.floor(MAX_VISIBLE / 2), view.length - MAX_VISIBLE));
