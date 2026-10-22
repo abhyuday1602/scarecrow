@@ -176,8 +176,20 @@ describe("normalizeUrl", () => {
     expect(normalizeUrl("example.com")).toBe("https://example.com");
   });
 
-  it("prepends https:// to a bare host:port", () => {
-    expect(normalizeUrl("localhost:3000")).toBe("https://localhost:3000");
+  it("prepends https:// to a bare public host:port", () => {
+    expect(normalizeUrl("example.com:8080")).toBe("https://example.com:8080");
+  });
+
+  it("prepends http:// to local and private-network hosts (dev servers)", () => {
+    expect(normalizeUrl("localhost:3000")).toBe("http://localhost:3000");
+    expect(normalizeUrl("localhost")).toBe("http://localhost");
+    expect(normalizeUrl("127.0.0.1:5173/signup")).toBe("http://127.0.0.1:5173/signup");
+    expect(normalizeUrl("192.168.1.5:8080")).toBe("http://192.168.1.5:8080");
+    expect(normalizeUrl("10.0.0.2")).toBe("http://10.0.0.2");
+    expect(normalizeUrl("172.20.1.1")).toBe("http://172.20.1.1");
+    expect(normalizeUrl("myapp.local")).toBe("http://myapp.local");
+    expect(normalizeUrl("[::1]:3000")).toBe("http://[::1]:3000");
+    expect(normalizeUrl("172.32.0.1")).toBe("https://172.32.0.1");
   });
 
   it("leaves an explicit https:// URL untouched", () => {
@@ -278,5 +290,37 @@ describe("COMMANDS", () => {
       expect(cmd.summary).toBeTruthy();
       expect(cmd.spec).toBeDefined();
     }
+  });
+});
+
+describe("subcommand detection with flags first", () => {
+  it("finds the command after a flag and its value", () => {
+    const p = parse(["-p", "skeptic", "glance", "example.com"]);
+    expect(p.command).toBe("glance");
+    expect(p.flags.persona).toBe("skeptic");
+    expect(p.positionals).toEqual(["example.com"]);
+  });
+
+  it("doesn't mistake a flag value for a command", () => {
+    const p = parse(["example.com", "-t", "personas"]);
+    expect(p.command).toBe(null);
+    expect(p.flags.task).toBe("personas");
+  });
+
+  it("handles --flag=value and long flags before the command", () => {
+    expect(parse(["--persona=novice", "glance", "x.com"]).command).toBe("glance");
+    expect(parse(["--provider", "gemini", "doctor"]).command).toBe("doctor");
+  });
+});
+
+describe("assertSafeTarget link-local forms", () => {
+  it("blocks the IPv4-mapped IPv6 spelling of the metadata address", () => {
+    expect(() => assertSafeTarget("http://[::ffff:169.254.169.254]/")).toThrow(/link-local/);
+    expect(() => assertSafeTarget("http://[::ffff:a9fe:a9fe]/latest")).toThrow(/link-local/);
+  });
+
+  it("still allows other mapped addresses and localhost", () => {
+    expect(() => assertSafeTarget("http://[::ffff:127.0.0.1]:3000/")).not.toThrow();
+    expect(() => assertSafeTarget("http://localhost:3000/")).not.toThrow();
   });
 });

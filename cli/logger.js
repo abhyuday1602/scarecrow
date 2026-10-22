@@ -6,8 +6,9 @@ let _path = null;
 let _runDir = null;
 let _logResponses = true;
 
-// Called by session.js to scope logs to the current run directory.
-export function setLogDir(dir) { _runDir = dir; }
+// Called by session.js to scope logs to the current run directory. Resets the file path,
+// so each run in one process (TUI, batch) gets its own log instead of appending to the first.
+export function setLogDir(dir) { _runDir = dir; _path = null; }
 
 // Called by session.js from inputs.logResponses (--no-log-responses). When off, LLM prompt
 // text and response bodies are left out of the log entirely — only metadata (timing, token

@@ -45,13 +45,17 @@ export function compareRuns(run1Path, run2Path) {
       run2: run2.a11y?.violations?.length || 0,
       diff: (run2.a11y?.violations?.length || 0) - (run1.a11y?.violations?.length || 0),
     },
-    verdict: verdictFor(run1, run2),
+    // Different site, persona or goal: the finding counts measure different things, so
+    // calling one "better" would be noise. Say so instead of giving a verdict.
+    comparable: run1.url === run2.url && run1.persona === run2.persona && run1.goal === run2.goal,
+    verdict: null,
     timestamp: {
       run1: run1.timestamp,
       run2: run2.timestamp,
     },
   };
 
+  diff.verdict = diff.comparable ? verdictFor(run1, run2) : "not comparable";
   return diff;
 }
 
@@ -96,6 +100,7 @@ export function generateDiffReport(run1Path, run2Path) {
   const verdictLine =
     diff.verdict === "improved" ? c.green(`${sym.ok} improved`)
     : diff.verdict === "regressed" ? c.red(`${sym.err} regressed`)
+    : diff.verdict === "not comparable" ? c.yellow(`${sym.warn} not comparable — the runs differ in url, persona or goal`)
     : c.dim("─ unchanged");
 
   return panel("run comparison", [

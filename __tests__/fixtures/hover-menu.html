@@ -1,0 +1,8 @@
+<!doctype html><meta charset="utf-8"><title>Hover menu</title>
+<style>
+  .menu { position: relative; display: inline-block; }
+  .menu ul { display: none; position: absolute; top: 100%; left: 0; margin: 0; padding: 8px; background: #eee; list-style: none; }
+  .menu:hover ul { display: block; }
+</style>
+<nav><div class="menu"><button>Products</button><ul><li><a href="#pricing" onclick="document.getElementById('out').textContent='Pricing opened'">Pricing</a></li></ul></div></nav>
+<main><p id="out"></p></main>

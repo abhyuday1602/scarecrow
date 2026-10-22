@@ -1,0 +1,20 @@
+name: Feature request
+description: Suggest something Scarecrow should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to test or learn that Scarecrow can't help with today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like
+      description: How you'd expect it to work, from the command line or the TUI.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've tried

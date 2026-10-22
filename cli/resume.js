@@ -94,10 +94,14 @@ export function markSessionComplete(runDir) {
   const statePath = join(runDir, "session-state.json");
   if (!existsSync(statePath)) return;
 
-  const state = JSON.parse(readFileSync(statePath, "utf-8"));
-  state.interrupted = false;
-  state.completedAt = new Date().toISOString();
-  atomicWrite(statePath, JSON.stringify(state, null, 2));
+  // Best effort: a corrupt state file must never turn a finished run into an error (this
+  // runs after findings.json and report.md are already written).
+  try {
+    const state = JSON.parse(readFileSync(statePath, "utf-8"));
+    state.interrupted = false;
+    state.completedAt = new Date().toISOString();
+    atomicWrite(statePath, JSON.stringify(state, null, 2));
+  } catch { /* leave the state file as it was */ }
 }
 
 // Single-quote a value for POSIX shells (the only safe general quoting form).
@@ -114,7 +118,8 @@ export function generateRerunCommand(state) {
   if (i.steps && i.steps !== 8) parts.push(`--steps ${i.steps}`);
   if (i.provider) parts.push(`--provider ${i.provider}`);
   if (i.model) parts.push(`--model ${shellQuote(i.model)}`);
-  if (i.headed) parts.push("--headed");
+  // Headed is the default, so only a headless run needs a flag to reproduce it.
+  if (i.headed === false) parts.push("--no-headed");
   if (i.device && i.device !== "desktop") parts.push(`--device ${i.device}`);
   // i.upload is the *resolved* list of absolute paths, and [] is truthy — so a plain
   // truthiness check appended "--upload" to every command, including runs that uploaded
@@ -123,8 +128,6 @@ export function generateRerunCommand(state) {
   const uploads = Array.isArray(i.upload) ? i.upload : i.upload ? [i.upload] : [];
   if (uploads.length) parts.push(`--upload=${shellQuote(uploads.map((p) => basename(String(p))).join(","))}`);
   if (i.success) parts.push(`--success ${shellQuote(i.success)}`);
-  if (i.record) parts.push("--record");
-  if (i.a11y) parts.push("--a11y");
   if (i.ci) parts.push("--ci");
   if (i.json) parts.push("--json");
   if (i.quiet) parts.push("--quiet");

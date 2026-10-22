@@ -59,7 +59,7 @@ function SlashMenu({ items, index }) {
         const sel = start + i === index;
         return html`
           <Text key=${cmd.name} color=${sel ? theme.accent : undefined}>
-            ${sel ? "❯" : " "} <Text bold=${sel}>/${cmd.name}</Text>${cmd.args ? ` ${  cmd.args}` : ""}  <Text dimColor>${cmd.summary}</Text>
+            ${sel ? "❯" : " "} <Text bold=${sel}>/${cmd.name}</Text>${cmd.args ? ` ${  cmd.args}` : ""}  <Text dimColor>${cmd.summary}</Text>${cmd.comingSoon ? html`<Text color=${theme.warning}> · coming soon</Text>` : ""}
           </Text>`;
       })}
       ${hiddenBelow > 0 ? html`<Text dimColor>  ↓ ${hiddenBelow} more</Text>` : null}

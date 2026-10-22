@@ -16,18 +16,24 @@ logs/
 uploads/*
 !uploads/README.md
 
-# local working notes and internal design/audit docs — never published
+# local working notes and internal design/audit docs — never published.
+# plan/ holds the roadmap and code review, which describe unfixed security issues.
 .dev/
 docs/
+plan/
 opencode.json
 
 # build / test output
 *.tgz
 coverage/
+.eslintcache
 
 # misc
 *.log
 .DS_Store
+Thumbs.db
+*.swp
+*~
 .claude/
 .vscode/
 .idea/

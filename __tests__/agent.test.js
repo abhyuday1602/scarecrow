@@ -1,104 +1,130 @@
-import { describe, it, expect } from "vitest";
-import { safeJson, stopAtDelimiter, stripThinkAloud } from "../agent.js";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { streamStringField, extractJson } from "../llm.js";
+import { decideStep, debrief, glance } from "../agent.js";
 
-describe("stripThinkAloud", () => {
-  const collect = () => {
+describe("streamStringField", () => {
+  const collect = (field = "thought") => {
     const out = [];
-    return { out, fn: stripThinkAloud((t) => out.push(t)) };
+    return { out, feed: streamStringField(field, (t) => out.push(t)) };
   };
 
-  it("removes the tags but keeps the narration", () => {
-    const { out, fn } = collect();
-    fn("<think-aloud>\nHmm, this is confusing.\n</think-aloud>");
-    expect(out.join("")).toBe("\nHmm, this is confusing.\n");
+  it("streams only the named field's value", () => {
+    const { out, feed } = collect();
+    feed('{"thought":"Where is the sign-up button?","action":"scroll"}');
+    expect(out.join("")).toBe("Where is the sign-up button?");
   });
 
-  it("removes a tag split across chunk boundaries", () => {
-    const { out, fn } = collect();
-    for (const ch of "<think-aloud>Wait.</think-aloud>") fn(ch);
-    expect(out.join("")).toBe("Wait.");
+  it("handles the field split across many fragments, including the key", () => {
+    const { out, feed } = collect();
+    for (const ch of '{"tho' + 'ught" : "Hmm, okay." , "action":"done"}') feed(ch);
+    expect(out.join("")).toBe("Hmm, okay.");
   });
 
-  it("does not swallow ordinary prose containing '<'", () => {
-    const { out, fn } = collect();
-    fn("the price is < $5 and ");
-    expect(out.join("")).toBe("the price is < $5 and ");
+  it("decodes escapes, even when split across fragments", () => {
+    const { out, feed } = collect();
+    ['{"thought":"line one\\', 'nline \\"two\\" \\u00', 'e9"}'].forEach(feed);
+    expect(out.join("")).toBe('line one\nline "two" é');
   });
 
-  it("passes through text with no tags at all", () => {
-    const { out, fn } = collect();
-    fn("plain narration");
-    expect(out.join("")).toBe("plain narration");
+  it("isn't fooled by braces or the field name inside other values", () => {
+    const { out, feed } = collect("reaction");
+    feed('{"summary":"a {weird} \\"reaction\\": thing","reaction":"It was fine."}');
+    expect(out.join("")).toBe("It was fine.");
   });
 
-  it("returns undefined when there is no downstream sink", () => {
-    expect(stripThinkAloud(undefined)).toBeUndefined();
+  it("is a no-op without a sink", () => {
+    expect(() => streamStringField("thought", undefined)("{}")).not.toThrow();
   });
 });
 
-describe("safeJson", () => {
-  it("parses plain JSON", () => {
-    expect(safeJson('{"action":"click","target":3}')).toEqual({ action: "click", target: 3 });
+describe("extractJson", () => {
+  it("parses a plain object", () => {
+    expect(extractJson('{"action":"click","target":3}')).toEqual({ action: "click", target: 3 });
   });
 
-  it("parses JSON inside a ```json fence", () => {
-    expect(safeJson('```json\n{"action":"done"}\n```')).toEqual({ action: "done" });
+  it("ignores prose containing braces before the real object", () => {
+    const text = 'I see a {confusing} banner. Then: {"action":"scroll"} trailing';
+    expect(extractJson(text, ["action"])).toEqual({ action: "scroll" });
   });
 
-  it("parses JSON preceded by prose", () => {
-    const out = safeJson('I think the signup button is #4.\n{"action":"click","target":4}');
-    expect(out).toEqual({ action: "click", target: 4 });
+  it("strips code fences", () => {
+    expect(extractJson('```json\n{"summary":"ok"}\n```')).toEqual({ summary: "ok" });
   });
 
-  it("parses JSON wrapped in prose and a bare fence", () => {
-    expect(safeJson('Sure!\n```\n{"summary":"ok","findings":[]}\n```\nHope that helps.'))
-      .toEqual({ summary: "ok", findings: [] });
-  });
-
-  it("returns null when there is no JSON at all", () => {
-    expect(safeJson("I could not decide on an action.")).toBeNull();
-  });
-
-  it("returns null for malformed JSON", () => {
-    expect(safeJson('{"action": "click", target: }')).toBeNull();
+  it("returns null when there's no JSON", () => {
+    expect(extractJson("no json here")).toBeNull();
+    expect(extractJson('{"broken": ')).toBeNull();
   });
 });
 
-describe("stopAtDelimiter", () => {
-  const collect = (delimiter, chunks) => {
-    let out = "";
-    const wrapped = stopAtDelimiter((t) => { out += t; }, delimiter);
-    for (const ch of chunks) wrapped(ch);
-    return out;
+// The agent functions against scripted model replies (llm.js cassette replay), so no
+// network and no API key are involved.
+describe("agent with a replayed model", () => {
+  let dir;
+  const persona = { name: "Test", description: "You are a test persona." };
+  const cfg = { provider: "anthropic", model: "test-model" };
+  const useSequence = (sequence) => {
+    const path = join(dir, `cassette-${Math.random().toString(36).slice(2)}.json`);
+    writeFileSync(path, JSON.stringify({ sequence }));
+    process.env.SCARECROW_LLM_CASSETTE = path;
+    process.env.SCARECROW_LLM_MODE = "replay";
   };
 
-  it("streams prose, holding back only a delimiter-length tail", () => {
-    // The last (delimiter.length - 1) chars stay unflushed in case they start the
-    // delimiter — real responses always end in JSON, so nothing real is lost.
-    expect(collect('{"action":', ["thinking about ", "the page"])).toBe("thinking about");
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "crow-agent-")); });
+  afterEach(() => {
+    delete process.env.SCARECROW_LLM_CASSETTE;
+    delete process.env.SCARECROW_LLM_MODE;
+    rmSync(dir, { recursive: true, force: true });
   });
 
-  it("stops at the delimiter and drops the JSON tail", () => {
-    expect(collect('{"action":', ['the button looks off. {"action":"click","target":2}']))
-      .toBe("the button looks off. ");
+  const step = (extra = {}) => decideStep({
+    cfg, persona, goal: "sign up", stepNum: 1, maxSteps: 3, history: [],
+    elements: [{ idx: 1, type: "button", label: "Sign up" }], screenshotB64: "AAAA", ...extra,
   });
 
-  it("never leaks a delimiter split across two chunks", () => {
-    expect(collect('{"action":', ["I will click. {\"act", 'ion":"click","target":1}']))
-      .toBe("I will click. ");
+  it("returns the structured action and streams the thought", async () => {
+    useSequence([{ input: { thought: "There it is.", action: "click", target: 1 } }]);
+    const chunks = [];
+    const a = await step({ onChunk: (t) => chunks.push(t) });
+    expect(a).toMatchObject({ action: "click", target: 1, thought: "There it is." });
+    expect(chunks.join("")).toBe("There it is.");
   });
 
-  it("flushes text that merely starts like the delimiter", () => {
-    // "{x" begins like the delimiter but isn't — it must still reach the terminal
-    // (minus the standing delimiter-length hold at the very end).
-    expect(collect('{"action":', ["brace {x here", " and more"])).toBe("brace {x here");
+  it("re-asks once when the action isn't valid, then gives up cleanly", async () => {
+    useSequence([{ input: { thought: "?", action: "teleport" } }, { input: null, text: "nonsense" }]);
+    const a = await step();
+    expect(a.action).toBe("giveup");
   });
 
-  it("emits nothing after the delimiter even across further chunks", () => {
-    expect(collect("=== FINDINGS", ["narration === FIN", "DINGS\n[]", "more"])).toBe("narration ");
+  it("debrief returns findings with evidence steps", async () => {
+    useSequence([{ input: {
+      reaction: "Frustrating.", summary: "Hard to find", wouldCompleteTask: "no",
+      findings: [{ issue: "CTA hidden", severity: "high", heuristic: "Visibility", fix: "Show it", steps: [2] }],
+    } }]);
+    const f = await debrief({ cfg, persona, goal: "sign up", transcript: "Step 1: …", outcome: "gave up" });
+    expect(f.wouldCompleteTask).toBe("no");
+    expect(f.findings[0].steps).toEqual([2]);
+    expect(f).not.toHaveProperty("reaction");
   });
 
-  it("returns undefined when there is no onChunk", () => {
-    expect(stopAtDelimiter(undefined, "{")).toBeUndefined();
+  it("debrief falls back gracefully when nothing parses", async () => {
+    useSequence([{ input: null, text: "I refuse." }]);
+    const f = await debrief({ cfg, persona, goal: "x", transcript: "", outcome: "ran out of steps" });
+    expect(f).toMatchObject({ wouldCompleteTask: "unsure", findings: [], _raw: "I refuse." });
+  });
+
+  it("glance splits narration from findings", async () => {
+    useSequence([{ input: { reaction: "Looks busy.", summary: "Cluttered", wouldCompleteTask: "unsure", findings: [] } }]);
+    const g = await glance({ cfg, persona, goal: "find pricing", screenshotB64: "AAAA" });
+    expect(g.narration).toBe("Looks busy.");
+    expect(g.findings).toEqual({ summary: "Cluttered", wouldCompleteTask: "unsure", findings: [] });
+  });
+
+  it("replay throws on a miss instead of calling the network", async () => {
+    useSequence([]);
+    await expect(step()).rejects.toThrow(/cassette miss/);
   });
 });

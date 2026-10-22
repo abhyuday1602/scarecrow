@@ -45,8 +45,10 @@ const WELCOME_BANNER_ROWS = 12;
 // Picker chrome around its list rows: border 2 + paddingY 2 + title 2 + key hints 2 +
 // "N more" markers 2, plus 2 for the filter line when it's filterable.
 const pickerChrome = (filterable) => (filterable ? 12 : 10);
-// Static item id for the header band printed at the top of the transcript.
+// Static item id for the header band printed at the top of the transcript, and the rows it
+// takes (the band plus its bottom margin).
 const HEADER_ID = "header";
+const HEADER_ROWS = 2;
 
 // --- Welcome: compact header shown only when the transcript is empty and idle ---
 function Welcome({ theme, cols, rows }) {
@@ -636,7 +638,7 @@ export function App({ ctx, initialSession }) {
   };
   const openPersonaAdd = () => setOverlay({ type: "persona-add" });
   const openRerunPicker = () => {
-    const sessions = loadAllSessions("runs", 15);
+    const sessions = loadAllSessions(undefined, 15); // the default runs dir (~/.config/scarecrow/runs)
     if (!sessions.length) { message("no past sessions found in runs/.", theme.warning); return; }
     setOverlay({
       type: "pick", title: "Rerun a session",
@@ -734,7 +736,7 @@ export function App({ ctx, initialSession }) {
     pushNode(html`
       <Box ...${box(theme.border)}>
         <Text bold>commands</Text>
-        ${COMMANDS.filter((c) => c.name !== "exit").map((c) => html`<Text key=${c.name}>  <Text color=${theme.accent}>/${c.name}</Text>${c.args ? ` ${  c.args}` : ""}  <Text dimColor>${c.summary}</Text></Text>`)}
+        ${COMMANDS.filter((c) => c.name !== "exit").map((c) => html`<Text key=${c.name}>  <Text color=${c.comingSoon ? theme.muted : theme.accent}>/${c.name}</Text>${c.args ? ` ${  c.args}` : ""}  <Text dimColor>${c.summary}</Text>${c.comingSoon ? html`<Text color=${theme.warning}> · coming soon</Text>` : ""}</Text>`)}
         <Text> </Text>
         <Text bold>keys</Text>
         <Text>  <Text color=${theme.accent}>Shift+Tab</Text>  <Text dimColor>cycle mode (walkthrough / glance)</Text></Text>
@@ -901,7 +903,7 @@ export function App({ ctx, initialSession }) {
       if (text.startsWith("/")) { setPostRun(false); runSlash(api, text); return; }
       if (looksLikeUrl(text)) {
         setPostRun(false);
-        const u = /^https?:\/\//i.test(text) ? text : `https://${  text}`;
+        const u = normalizeUrl(text);
         patchSession({ url: u });
         message(`url → ${u}${  sessionRef.current.task ? "" : ". Now type the goal."}`);
         return;
@@ -926,7 +928,7 @@ export function App({ ctx, initialSession }) {
     setHistory((h) => (h[h.length - 1] === text ? h : [...h, text]));
     if (text.startsWith("/")) { runSlash(api, text); return; }
     if (looksLikeUrl(text)) {
-      const u = /^https?:\/\//i.test(text) ? text : `https://${  text}`;
+      const u = normalizeUrl(text);
       patchSession({ url: u });
       message(`url → ${u}${  sessionRef.current.task ? "" : ". Now type the goal."}`);
       return;
@@ -1003,16 +1005,23 @@ export function App({ ctx, initialSession }) {
   const isRunning   = phase === "running";
   const isOverlay   = !!overlay;
   const showWelcome = scrollback.length === 0 && !isRunning && !isOverlay && !collecting;
-  const centered    = showWelcome || isOverlay; // horizontally; the frame has no spare height
+  const centered    = showWelcome || isOverlay;
   // The CONFIRM box already shows the goal — don't repeat it above the input.
   const showGoalHint = collecting && !collecting.confirmMode;
 
-  // Rows the live frame (welcome / overlay / confirm box / in-progress run) may use. Ink
-  // prints only the new <Static> lines while the whole dynamic frame stays shorter than
-  // the terminal; at full height it clears the screen and reprints the entire transcript
-  // on every render. So: terminal rows, minus the measured input area, minus a spare row
-  // for log-update's trailing newline.
-  const budget = Math.max(4, rows - chromeRows - 2);
+  // Layout. Ink prints only the new <Static> lines while the whole dynamic frame stays
+  // shorter than the terminal; at full height it clears the screen and reprints the entire
+  // transcript on every render. So the frame is always kept under the terminal height:
+  //  - Empty transcript (start screen, or right after /clear): the frame fills the screen
+  //    below the header band — welcome or picker centered, input pinned to the bottom.
+  //    That's safe here because there's no transcript for Ink to reprint.
+  //  - Otherwise it takes its natural height under the transcript, Claude Code style.
+  // `budget` is what the live part (welcome / overlay / confirm box / running step) may
+  // use: the frame's rows minus the measured input area. The spare row is for log-update's
+  // trailing newline.
+  const fillScreen = scrollback.length === 0 && !isRunning;
+  const frameRows = Math.max(8, rows - HEADER_ROWS - 1);
+  const budget = Math.max(4, (fillScreen ? frameRows : rows - 2) - chromeRows);
   useEffect(() => {
     if (!chromeRef.current) return;
     const { height } = measureElement(chromeRef.current);
@@ -1020,17 +1029,17 @@ export function App({ ctx, initialSession }) {
   });
 
   // ── Transcript (<Static>, header band first) · live frame · input area ──
-  // The root has no fixed height on purpose: see `budget` above.
   const staticItems = [{ id: HEADER_ID }, ...scrollback];
   return html`
-    <Box flexDirection="column" width=${cols}>
+    <Box flexDirection="column" width=${cols} height=${fillScreen ? frameRows : undefined}>
       <Static key=${gen} items=${staticItems}>
         ${(item) => item.id === HEADER_ID
           ? html`<Box key=${item.id} marginBottom=${1}><${Header} theme=${theme} version=${ctx.version || "0.0.0"} cols=${cols} /></Box>`
           : html`<Box key=${item.id} flexDirection="column" marginBottom=${1} width=${cols} paddingX=${1}>${item.node}</Box>`}
       </Static>
 
-      <Box flexDirection="column" paddingX=${1} alignItems=${centered ? "center" : "stretch"}>
+      <Box flexDirection="column" paddingX=${1} flexGrow=${fillScreen ? 1 : 0}
+           justifyContent=${fillScreen ? "center" : "flex-start"} alignItems=${centered ? "center" : "stretch"}>
         ${showWelcome ? html`<${Welcome} key="welcome" theme=${theme} cols=${cols} rows=${budget} />` : null}
 
         ${isOverlay ? html`<Box key="overlay">${renderOverlay()}</Box>` : null}

@@ -76,11 +76,11 @@ export function makeInkReporter(model, bump) {
     artifacts(lines) { model.artifacts = lines; bump(); },
     summary(data) { model.summary = data; bump(); },
     json() { /* no machine output in the TUI */ },
-    async rateLimitWait({ waitMs, attempt, maxRetries }) {
+    async rateLimitWait({ waitMs, attempt, maxRetries, reason = "rate limited" }) {
       const end = Date.now() + waitMs;
       const tick = () => {
         const s = Math.max(0, Math.ceil((end - Date.now()) / 1000));
-        model.phase = `rate limited — retrying in ${s}s (${attempt}/${maxRetries})`;
+        model.phase = `${reason} — retrying in ${s}s (${attempt}/${maxRetries})`;
         bump();
       };
       tick();

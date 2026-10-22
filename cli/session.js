@@ -21,6 +21,11 @@ import { saveSessionState, markSessionComplete } from "./resume.js";
 import { logger, setLogDir, setLogResponses } from "./logger.js";
 import { configDir, ensureDir } from "./paths.js";
 import { registerCleanup } from "./cleanup.js";
+import { parseSuccess, checkSuccess } from "./success.js";
+import { MAX_STEPS } from "./limits.js";
+
+const isAbortError = (err) =>
+  err?.name === "AbortError" || err?.code === "ABORT_ERR" || err?.constructor?.name === "APIUserAbortError";
 
 const defaultReporter = (inputs) =>
   makeTerminalReporter({ quiet: inputs.quiet, json: inputs.json, yes: inputs.yes });
@@ -130,16 +135,19 @@ export async function runSession(inputs, { version, reporter, shouldStop, abortS
   let outcome = "ran out of steps";
   let cancelled = false;
 
-  // Objective goal check: a substring to look for in the URL or visible page text.
-  const successMarker = inputs.success;
+  // Objective goal check (cli/success.js): text, URL or selector, checked after every
+  // action and once more at the end. Once hit, it stays hit.
+  const successSpec = inputs.success ? parseSuccess(inputs.success) : null;
   let successHit = false;
-  const checkSuccess = async () => {
-    if (!successMarker || successHit) return;
-    if (
-      session.url().toLowerCase().includes(successMarker.toLowerCase()) ||
-      (await session.hasText(successMarker))
-    ) successHit = true;
+  const probeSuccess = async () => {
+    if (!successSpec || successHit) return;
+    successHit = await checkSuccess(successSpec, {
+      url: session.url(),
+      text: () => session.pageText(),
+      hasSelector: (css) => session.hasSelector(css),
+    });
   };
+  let toolFailures = 0; // act() results the automation itself caused ("[TOOL] …")
 
   try {
     let stop = rep.phase(`Loading ${  inputs.url  } …`);
@@ -157,17 +165,27 @@ export async function runSession(inputs, { version, reporter, shouldStop, abortS
     rep.start({ version, inputs });
     logger.log("START", { url: inputs.url, persona: inputs.personaKey, task: inputs.task, provider: inputs.cfg.provider, model: inputs.cfg.model, steps: inputs.steps, mode: inputs.glance ? "glance" : "session" });
 
+    // Local copy: an "add more steps?" extension changes this, never inputs.steps.
     let totalSteps = inputs.steps;
     let step = 1;
     while (step <= totalSteps) {
       if (shouldStop?.()) { cancelled = true; outcome = "cancelled"; logger.log("CANCEL", { step }); break; }
 
       stop = rep.phase("Reading the page …");
-      const elements = await session.annotate();
-      const b64 = await session.shot();
+      // Two screenshots: a clean one (what a person sees — used in the report and as
+      // evidence) and a marked one with numbered badges (what the model picks from). The
+      // badges are removed right after, so they never leak into anything else.
+      const clean = await session.shot();
+      const { elements, omitted, frames } = await session.annotate();
+      const marked = await session.shot();
+      await session.clearMarks();
       const stepPad = String(totalSteps).length;
-      const shotName = `step-${String(step).padStart(stepPad, "0")}.png`;
-      await session.saveShot(join(runDir, shotName));
+      const stepId = `step-${String(step).padStart(stepPad, "0")}`;
+      const shotName = `${stepId}.png`;
+      try {
+        writeFileSync(join(runDir, shotName), Buffer.from(clean, "base64"));
+        writeFileSync(join(runDir, `${stepId}.marked.png`), Buffer.from(marked, "base64"));
+      } catch { /* screenshots are best effort */ }
       stop();
 
       // Header first; the spinner then covers model latency until the first token.
@@ -183,12 +201,14 @@ export async function runSession(inputs, { version, reporter, shouldStop, abortS
         maxSteps: totalSteps,
         history,
         elements,
-        screenshotB64: b64,
+        omitted,
+        frames,
+        screenshotB64: marked,
         uploadReady: inputs.upload.length > 0,
         routeContext: session.getRouteContext(),
         onChunk: printer.chunk,
         onRateLimit: rep.rateLimitWait,
-        signal: abortSignal,
+        abortSignal,
       });
 
       printer.end();
@@ -225,6 +245,7 @@ export async function runSession(inputs, { version, reporter, shouldStop, abortS
       }
       stop();
 
+      if (res.startsWith("[TOOL]")) toolFailures++;
       // Fold in any file-upload outcome the picker handler recorded during this action.
       const up = session.drainUploads();
       const resFull = up ? `${res} ${up}` : res;
@@ -245,7 +266,7 @@ export async function runSession(inputs, { version, reporter, shouldStop, abortS
       history.push(`${describe(action)} → ${resFull}`);
       transcript.push(`Step ${step}: ${action.thought}\n  action: ${describe(action)}\n  result: ${resFull}`);
       steps.push({ n: step, shot: shotName, thought: action.thought, action: describe(action), result: resFull });
-      await checkSuccess();
+      await probeSuccess();
 
       // Save session state for potential resume. cfg holds a live client and is
       // dropped; provider/model are lifted out of it so re-run can recover them.
@@ -259,26 +280,26 @@ export async function runSession(inputs, { version, reporter, shouldStop, abortS
 
       step++;
 
-      // If we ran out of steps, ask the user if they want to continue.
-      if (step > totalSteps && outcome === "ran out of steps" && onOutOfSteps) {
+      // If we ran out of steps, ask the user if they want to continue — up to MAX_STEPS
+      // in total, however many times they extend.
+      if (step > totalSteps && outcome === "ran out of steps" && onOutOfSteps && totalSteps < MAX_STEPS) {
         const res = await onOutOfSteps({ step: step - 1, totalSteps, history });
         if (res?.extraSteps) {
-          totalSteps += res.extraSteps;
-          inputs.steps = totalSteps;
+          totalSteps = Math.min(MAX_STEPS, totalSteps + res.extraSteps);
           logger.log("EXTEND_STEPS", { extra: res.extraSteps, newMax: totalSteps });
         }
       }
     }
 
     const finalUrl = session.url();
-    await checkSuccess();
-    const assertion = successMarker ? { marker: successMarker, passed: successHit } : null;
-    const signal =
-      `Final URL: ${finalUrl}${ 
+    await probeSuccess();
+    const assertion = successSpec ? { marker: successSpec.raw, kind: successSpec.kind, passed: successHit } : null;
+    const groundTruth =
+      `Final URL: ${finalUrl}${
       assertion
-        ? `\nObjective success check: the marker "${assertion.marker}" was ${
-            assertion.passed ? "FOUND" : "NOT found"
-          } in the final URL or page text.`
+        ? `\nObjective success check (${assertion.kind}: ${assertion.marker}): ${
+            assertion.passed ? "PASSED — the goal state was reached" : "FAILED — the goal state was never reached"
+          }.`
         : ""}`;
 
     rep.sessionEnded(outcome, runDir);
@@ -286,6 +307,7 @@ export async function runSession(inputs, { version, reporter, shouldStop, abortS
     // On a user cancel we stop here: per-step screenshots are already on disk, but we
     // skip the (costly) debrief and the findings/report artifacts.
     if (cancelled) return { cancelled: true, outcome, runDir };
+    const stepsUsed = steps.length;
 
     rep.debriefHeading();
     const debriefPrinter = rep.reflecting();
@@ -297,7 +319,7 @@ export async function runSession(inputs, { version, reporter, shouldStop, abortS
       goal: inputs.task,
       transcript: transcript.join("\n\n"),
       outcome,
-      signal,
+      groundTruth,
       onChunk: (t) => { reflection += t; debriefPrinter.chunk(t); },
       onRateLimit: rep.rateLimitWait,
       abortSignal,
@@ -319,6 +341,9 @@ export async function runSession(inputs, { version, reporter, shouldStop, abortS
       outcome,
       finalUrl,
       assertion,
+      stepsUsed,
+      stepsAllowed: totalSteps,
+      toolFailures,
       a11y: a11yResults,
       routeHistory: session.getRouteHistory(),
       ...(findings || {}),
@@ -333,7 +358,7 @@ export async function runSession(inputs, { version, reporter, shouldStop, abortS
     const mdPath = join(runDir, "report.md");
     writeFileSync(
       mdPath,
-      buildReport({ inputs, outcome, finalUrl, assertion, steps, reflection: reflection.trim(), findings })
+      buildReport({ inputs, outcome, finalUrl, assertion, steps, reflection: reflection.trim(), findings, toolFailures })
     );
     // No "./" prefix: runDir defaults to an absolute path under the XDG config dir, so
     // prefixing produced paths like ".//home/you/.config/..." that don't copy-paste.
@@ -363,8 +388,15 @@ export async function runSession(inputs, { version, reporter, shouldStop, abortS
     // Mark session as complete so it doesn't show as "interrupted"
     markSessionComplete(runDir);
 
-    return { findings, outcome, runDir };
+    return { findings, outcome, runDir, assertion, toolFailures };
   } catch (err) {
+    // A user stop (TUI Esc / Ctrl+C) aborts the in-flight model call. That's a cancel,
+    // not a failure — don't write an "error" report over the steps already on disk.
+    if (abortSignal?.aborted || isAbortError(err)) {
+      logger.log("CANCEL", { during: "model call" });
+      rep.sessionEnded("cancelled", runDir);
+      return { cancelled: true, outcome: "cancelled", runDir };
+    }
     logger.log("ERROR", { message: err?.message || String(err) });
     // Write partial artifacts before re-throwing
     const partialReport = {

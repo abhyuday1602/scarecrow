@@ -1,0 +1,9 @@
+<!doctype html><meta charset="utf-8"><title>Cards</title>
+<main>
+  <div class="card" onclick="document.getElementById('out').textContent='card'" style="padding:20px;border:1px solid #ccc;width:300px">
+    <h2>Starter plan</h2>
+    <p>Everything you need to start.</p>
+    <button onclick="event.stopPropagation(); document.getElementById('out').textContent='buy'">Buy Starter</button>
+  </div>
+  <p id="out"></p>
+</main>
