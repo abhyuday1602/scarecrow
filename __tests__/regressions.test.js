@@ -60,3 +60,21 @@ describe("filesystem regressions", () => {
     expect(() => markSessionComplete(dir)).not.toThrow();
   });
 });
+
+describe("browser setup (first-run onboarding and install hints)", () => {
+  it("onboarding.js links under plain Node", async () => {
+    // onboarding.js imported installBrowser before it was exported, so the first-run
+    // wizard (every fresh `npx github:…` user) crashed on a module link error. Vitest's
+    // transform turns a missing named import into undefined, so load it in real Node.
+    const { execFileSync } = await import("node:child_process");
+    const url = new URL("../cli/onboarding.js", import.meta.url).href;
+    expect(() => execFileSync(process.execPath, ["-e", `await import(${JSON.stringify(url)})`, "--input-type=module"], { stdio: "pipe" })).not.toThrow();
+  });
+
+  it("pins the manual install hint to our Playwright version", async () => {
+    const { browserInstallCommand } = await import("../cli/browser-setup.js");
+    const { createRequire } = await import("node:module");
+    const { version } = createRequire(import.meta.url)("playwright/package.json");
+    expect(browserInstallCommand()).toBe(`npx playwright@${version} install chromium`);
+  });
+});

@@ -20,18 +20,36 @@ export async function isBrowserInstalled() {
   }
 }
 
+// Our playwright dependency's package.json and its path. cli.js isn't in playwright's
+// "exports"; package.json is, and its "bin" names the CLI.
+function playwrightPkg() {
+  const require = createRequire(import.meta.url);
+  const path = require.resolve("playwright/package.json");
+  return { path, pkg: require(path) };
+}
+
+// The command to tell people to run by hand. Pinned to our Playwright version: under
+// `npx github:…` there's no local playwright for a bare `npx playwright` to find, so it
+// would fetch the latest from the registry and could install a Chromium revision ours
+// can't launch.
+export function browserInstallCommand() {
+  try {
+    return `npx playwright@${playwrightPkg().pkg.version} install chromium`;
+  } catch {
+    return "npx playwright install chromium";
+  }
+}
+
 // Run the Playwright CLI bundled with *our* playwright dependency, with this same Node
 // binary. `npx playwright` could resolve a different Playwright version (global, or a
 // newer one from the registry) and install a browser revision ours can't launch; it also
 // needed shell: true, which is a quoting hazard.
-function installBrowser() {
+export function installBrowser() {
   return new Promise((resolve, reject) => {
     let cli;
     try {
-      // cli.js isn't in playwright's "exports"; package.json is, and its "bin" names the CLI.
-      const require = createRequire(import.meta.url);
-      const pkgPath = require.resolve("playwright/package.json");
-      cli = join(dirname(pkgPath), require(pkgPath).bin.playwright);
+      const { path, pkg } = playwrightPkg();
+      cli = join(dirname(path), pkg.bin.playwright);
     } catch (e) { reject(e); return; }
     const proc = spawn(process.execPath, [cli, "install", "chromium"], { stdio: "inherit" });
     proc.on("close", (code) => {
@@ -47,7 +65,7 @@ export async function ensureBrowser() {
 
   if (!isInteractive()) {
     throw new UserError(
-      "Playwright Chromium is not installed.\nRun `npx playwright install chromium`, then try again."
+      `Playwright Chromium is not installed.\nRun \`${browserInstallCommand()}\`, then try again.`
     );
   }
 
@@ -57,7 +75,7 @@ export async function ensureBrowser() {
   );
   if (!ok) {
     throw new UserError(
-      'Browser required. Run `npx playwright install chromium` manually, then try again.'
+      `Browser required. Run \`${browserInstallCommand()}\` manually, then try again.`
     );
   }
 
@@ -66,6 +84,6 @@ export async function ensureBrowser() {
   console.log();
 
   if (!(await isBrowserInstalled())) {
-    throw new UserError("Browser installation failed. Run `npx playwright install chromium` manually.");
+    throw new UserError(`Browser installation failed. Run \`${browserInstallCommand()}\` manually.`);
   }
 }

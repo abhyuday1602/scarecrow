@@ -13,9 +13,11 @@
 - **Findings cite evidence.** Each finding lists the steps it happened at, and `report.md` links them to the screenshots.
 - **Tool failures are separated from site friction.** Actions that fail for automation reasons are marked `[TOOL]`, counted in `report.md` and `findings.json`, and kept out of the findings.
 - `localhost:3000`, `127.0.0.1:…`, private-network IPs and `*.local`/`*.test` hosts now default to `http://` instead of `https://`, which made the main use case, a local dev server, fail with an SSL error.
-- The npm package isn't published yet, so the README installs from source and says the package is coming soon.
+- **Run it with `npx github:abhyuday1602/scarecrow`**, straight from GitHub, with no clone and no npm registry publish (`npm install -g github:abhyuday1602/scarecrow` for a permanent `crow`). The registry package isn't published yet; the README leads with the GitHub command and keeps install-from-source for development.
+- The "install the browser" hints (`doctor`, onboarding, errors) now print `npx playwright@<our version> install chromium`. A bare `npx playwright` has no local Playwright to find under an npx install, so it fetched the latest from the registry, which can install a Chromium revision ours can't launch.
 
 ### Fixed
+- **The first-run setup wizard crashed before it started.** `onboarding.js` imported `installBrowser`, which `browser-setup.js` never exported, so running `crow` with no arguments on a machine without Chromium or an API key died with a module link error. That's the first thing every new `npx` user hits.
 - **Token counts were missing for Gemini, Groq and Ollama.** Streamed OpenAI-compatible calls never asked for usage (`stream_options.include_usage`), so every step logged `?`. The finish reason was also hardcoded to `stop`; both are now read from the response.
 - **A pasted API key didn't take effect until restart.** SDK clients were cached with the key they were created with; they're now rebuilt when the key changes.
 - **Batch `--ci` passed if the last run passed**, even when earlier runs failed. The batch now fails if any run failed or errored.

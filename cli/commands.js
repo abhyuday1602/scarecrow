@@ -25,6 +25,7 @@ import { isOllamaInstalled, isOllamaRunning, isModelInstalled, startDaemon, wait
 import { comingSoon } from "./coming-soon.js";
 import { parseSuccess, runPassed } from "./success.js";
 import { MAX_STEPS } from "./limits.js";
+import { browserInstallCommand } from "./browser-setup.js";
 
 // Upper bound for --steps (cli/limits.js); refuse rather than silently clamp.
 export { MAX_STEPS };
@@ -529,9 +530,9 @@ export async function cmdDoctor(ctx) {
     const { chromium } = await import("playwright");
     const exe = chromium.executablePath();
     const ok = !!exe && existsSync(exe);
-    add(ok ? "ok" : "err", "Playwright Chromium", ok ? exe : "not installed → npx playwright install chromium");
+    add(ok ? "ok" : "err", "Playwright Chromium", ok ? exe : `not installed → ${browserInstallCommand()}`);
   } catch {
-    add("err", "Playwright Chromium", "not installed → npx playwright install chromium");
+    add("err", "Playwright Chromium", `not installed → ${browserInstallCommand()}`);
   }
 
   if (ctx.envFiles.length) {

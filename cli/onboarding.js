@@ -8,7 +8,7 @@
 import { join } from "node:path";
 import { c, select, confirm, password } from "./ui.js";
 import { banner } from "./render.js";
-import { isBrowserInstalled, installBrowser } from "./browser-setup.js";
+import { isBrowserInstalled, installBrowser, browserInstallCommand } from "./browser-setup.js";
 import { PROVIDER_ENV, presentKeys, upsertEnvLine } from "./env.js";
 import { allPersonas } from "./personas-store.js";
 import { setSetting } from "./config.js";
@@ -51,7 +51,7 @@ async function stepBrowser() {
 
   const ok = await confirm("Install Chromium now? (~150 MB)", true);
   if (!ok) {
-    console.log(c.yellow("Skipped — you'll need to install it later. Run `npx playwright install chromium` when you're ready.\n"));
+    console.log(c.yellow(`Skipped — you'll need to install it later. Run \`${browserInstallCommand()}\` when you're ready.\n`));
     return;
   }
 
@@ -61,7 +61,7 @@ async function stepBrowser() {
     console.log(c.green("\n✓ Chromium installed.\n"));
   } catch (e) {
     console.error(c.red(`\nInstallation failed: ${redact(e.message)}`));
-    console.error(c.dim("You can install it later with: npx playwright install chromium\n"));
+    console.error(c.dim(`You can install it later with: ${browserInstallCommand()}\n`));
   }
 }
 

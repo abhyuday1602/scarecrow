@@ -5,8 +5,8 @@
 A chosen LLM persona does a real click-through of your site toward a goal, in an
 actual Playwright browser, then reports the usability friction it hit — issue,
 severity, suggested fix, and the steps where it happened. The command you run is
-**`crow`**. (The npm package, `@dumbduck/scarecrow`, is coming soon; for now, install
-from source.)
+**`crow`**, and you can run it straight from GitHub with
+`npx github:abhyuday1602/scarecrow`: no clone, no npm account, nothing to publish.
 
 This doc is both a user guide and a walkthrough of how it's built. If you just want
 to run it, start at Install. If you're here from a portfolio link, skip to
@@ -30,20 +30,39 @@ to run it, start at Install. If you're here from a portfolio link, skip to
 
 ## Install
 
+Requires **Node.js 20.19+ (or 22.13+, or 24+)**, which comes with `npx`, and an API key
+for Anthropic, Gemini, or Groq — or a local [Ollama](https://ollama.com) daemon, which
+needs no key.
+
+```bash
+npx github:abhyuday1602/scarecrow                 # run it: no clone, no install
+```
+
+npx fetches the repo from GitHub, installs it into its own cache and starts `crow`. The
+first run walks you through setup: it offers to download Chromium (~400 MB on disk, not
+bundled) and to save your API key in `~/.config/scarecrow/.env`. Anything you'd pass to
+`crow` works after it, e.g. `npx github:abhyuday1602/scarecrow doctor`.
+
+For a permanent `crow` command on your PATH, install it globally from GitHub instead:
+
+```bash
+npm install -g github:abhyuday1602/scarecrow
+```
+
+Add `#v0.2.0` (a tag) or `#<branch>` to either command to pin a version; without it you
+get the latest `main`. A registry package (`npx @dumbduck/scarecrow`) is coming soon.
+
+### From source (for development)
+
 ```bash
 git clone https://github.com/abhyuday1602/scarecrow
 cd scarecrow
 npm install                          # dependencies
 npm link                             # puts the `crow` command on your PATH
-npx playwright install chromium      # one-time: the browser (~400MB on disk, not bundled)
+npx playwright install chromium      # one-time: the browser (or let the first run offer it)
 crow init                            # scaffold .env for your API key
 crow doctor                          # verify Node, browser, and keys
 ```
-
-`npm install -g @dumbduck/scarecrow` will work once the package is published (coming soon).
-
-Requires **Node.js 20.19+ (or 22.13+, or 24+)** and an API key for Anthropic, Gemini,
-or Groq — or a local [Ollama](https://ollama.com) daemon, which needs no key.
 
 ## Quick start
 
@@ -60,6 +79,8 @@ crow glance example.com -p novice -t "find pricing"
 # skip confirmation, for scripts/CI
 crow example.com -p novice -t "sign up" --yes
 ```
+
+Using npx instead of an install? Replace `crow` with `npx github:abhyuday1602/scarecrow`.
 
 In interactive mode, type `/` for commands (personas, provider, model, theme, …),
 `Shift+Tab` to switch walkthrough/glance mode, and `/help` for the full list.
@@ -391,7 +412,8 @@ soon" instead of silently doing nothing:
 - **Accessibility audit** (`--a11y`, `/a11y`) — the current version only audits the first page
 - **Resume** (`crow resume`) — picking an interrupted run back up where it stopped
 - **Device presets in the TUI** (`/device`) — the CLI's `--device mobile` works today
-- **The npm package** — install from source until it's published
+- **The registry package** (`npx @dumbduck/scarecrow`) — until it's published, use
+  `npx github:abhyuday1602/scarecrow` (see [Install](#install))
 
 ## Engineering notes
 

@@ -20,6 +20,7 @@ import { parse, COMMANDS, looksLikeUrl, suggest } from "./cli/args.js";
 import { c, setColor, isCancel, isInteractive, UserError } from "./cli/ui.js";
 import { redact } from "./cli/logger.js";
 import { BIN } from "./cli/brand.js";
+import { browserInstallCommand } from "./cli/browser-setup.js";
 import { isUnsupportedNode, unsupportedNodeMessage } from "./cli/node-check.js";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -169,7 +170,7 @@ main().catch((e) => {
   }
   console.error(c.red("\nSomething failed: ") + msg);
   if (/Executable doesn't exist|browserType\.launch|playwright install/i.test(msg)) {
-    console.error(c.dim(`Install the browser first:  npx playwright install chromium   (or run \`${BIN} doctor\`)`));
+    console.error(c.dim(`Install the browser first:  ${browserInstallCommand()}   (or run \`${BIN} doctor\`)`));
   } else if (/401|403|api key|unauthorized|permission/i.test(msg)) {
     console.error(c.dim(`Looks like an auth problem — check your key and model.  Run \`${BIN} doctor\`.`));
   } else if (/Couldn't reach/i.test(msg)) {
