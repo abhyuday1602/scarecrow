@@ -34,6 +34,10 @@
     "agent"
   ],
   "author": "abhyuday",
+  "contributors": [
+    "Abhyuday Deshpande (https://github.com/abhyuday1602)",
+    "Claude (AI pair programmer by Anthropic, via Claude Code) (https://claude.com/claude-code)"
+  ],
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

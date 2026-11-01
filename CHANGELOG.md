@@ -40,7 +40,8 @@
 ### Added
 - Engine tests: browser tests against fixture pages (a cookie banner over the CTA, a card wrapping a button, a dropdown form, Enter-to-submit search, a hover menu, shadow DOM, a same-origin iframe, a dense nav), and end-to-end run-loop tests with model replies replayed from a cassette (`SCARECROW_LLM_CASSETTE`, `SCARECROW_LLM_MODE=record|replay`), with no API key or network calls. CI installs Chromium so they run there too.
 - `SECURITY.md`, issue templates (bug, feature, persona) and a pull request template.
-- A release workflow that publishes to npm with provenance when a version tag is pushed.
+- A release workflow: pushing a version tag runs lint and tests, checks the tag against `package.json`, and creates a GitHub Release with generated notes. Publishing to npm (with provenance) is opt-in through the `NPM_PUBLISH` repository variable, so tags work before npm is set up.
+- `CONTRIBUTING.md` and a Code of Conduct (Contributor Covenant 2.1), a Contributors section crediting Claude as a pair-programming contributor, README badges (CI, license, Node), and a Dependabot config that groups minor and patch updates into one weekly PR per group instead of one per package.
 
 ## 0.2.0 — 2026-08-09
 

@@ -1,5 +1,9 @@
 # Scarecrow
 
+[![CI](https://github.com/abhyuday1602/scarecrow/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/abhyuday1602/scarecrow/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D20.19-339933?logo=node.js&logoColor=white)](package.json)
+
 **Synthetic user testing for your product, from the terminal.**
 
 A chosen LLM persona does a real click-through of your site toward a goal, in an
@@ -26,6 +30,7 @@ to run it, start at Install. If you're here from a portfolio link, skip to
 - [Limitations](#limitations)
 - [Coming soon](#coming-soon)
 - [Engineering notes](#engineering-notes)
+- [Contributing](#contributing)
 - [License](#license)
 
 ## Install
@@ -472,6 +477,19 @@ dropdown form, a hover menu, shadow DOM, an iframe), and the whole run loop is t
 end to end with the model's replies replayed from a cassette
 (`SCARECROW_LLM_CASSETTE` + `SCARECROW_LLM_MODE=record|replay` in `llm.js`) — a real
 browser, no API key, no network calls.
+
+## Contributing
+
+Bug reports, persona ideas and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md)
+for setup, tests and what a PR needs, and the [Code of Conduct](CODE_OF_CONDUCT.md).
+Security problems go through [SECURITY.md](SECURITY.md), not public issues.
+
+### Contributors
+
+- **Abhyuday Deshpande** ([@abhyuday1602](https://github.com/abhyuday1602)): author and maintainer
+- **Claude** ([Anthropic](https://www.anthropic.com)'s AI model, via
+  [Claude Code](https://claude.com/claude-code)): pair-programming contributor. Commits
+  it co-wrote carry a `Co-Authored-By: Claude` trailer, so they're visible in `git log`.
 
 ## License
 
