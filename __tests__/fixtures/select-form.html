@@ -1,0 +1,15 @@
+<!doctype html><meta charset="utf-8"><title>Plan form</title>
+<main>
+  <h1>Choose a plan</h1>
+  <form onsubmit="event.preventDefault(); document.getElementById('out').textContent = 'Chose ' + this.plan.value + ' for ' + this.email.value;">
+    <label for="plan">Plan</label>
+    <select id="plan" name="plan">
+      <option value="free">Free</option>
+      <option value="pro">Pro — $12/mo</option>
+      <option value="team">Team</option>
+    </select>
+    <label>Email <input name="email" type="email" placeholder="you@example.com"></label>
+    <button type="submit">Continue</button>
+  </form>
+  <p id="out"></p>
+</main>

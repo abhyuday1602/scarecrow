@@ -59,7 +59,7 @@ function SlashMenu({ items, index }) {
         const sel = start + i === index;
         return html`
           <Text key=${cmd.name} color=${sel ? theme.accent : undefined}>
-            ${sel ? "❯" : " "} <Text bold=${sel}>/${cmd.name}</Text>${cmd.args ? ` ${  cmd.args}` : ""}  <Text dimColor>${cmd.summary}</Text>
+            ${sel ? "❯" : " "} <Text bold=${sel}>/${cmd.name}</Text>${cmd.args ? ` ${  cmd.args}` : ""}  <Text dimColor>${cmd.summary}</Text>${cmd.comingSoon ? html`<Text color=${theme.warning}> · coming soon</Text>` : ""}
           </Text>`;
       })}
       ${hiddenBelow > 0 ? html`<Text dimColor>  ↓ ${hiddenBelow} more</Text>` : null}
@@ -87,7 +87,7 @@ export function Prompt({ active, onSubmit, onShiftTab, history = [], collecting 
   // Contextual placeholder while the bar is collecting a missing field
   const placeholder =
     postRun ? "Type a goal, or /home to start fresh" :
-    collecting === "__confirm__" ? "Press Enter to start the run, or N to go home" :
+    collecting === "__confirm__" ? "Press Enter to start the run, or N to cancel" :
     collecting === "url"     ? "Enter the URL to test…" :
     collecting === "task"    ? "What's the goal?" :
     collecting === "persona" ? "Which persona? (type a key, or ↵ to open picker)" :

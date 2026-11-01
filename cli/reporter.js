@@ -48,9 +48,9 @@ export function makeTerminalReporter({ quiet = false, json = false, yes = false 
 
     // Called on each rate-limit retry attempt. Handles the full wait duration including
     // live countdown. For quiet/json modes the countdown is suppressed and we just wait.
-    async rateLimitWait({ waitMs, attempt, maxRetries }) {
+    async rateLimitWait({ waitMs, attempt, maxRetries, reason = "rate limited" }) {
       if (loud) {
-        await waitWithCountdown(waitMs, `Rate limited (${attempt}/${maxRetries})`);
+        await waitWithCountdown(waitMs, `${reason[0].toUpperCase()}${reason.slice(1)} (${attempt}/${maxRetries})`);
       } else {
         await new Promise((r) => setTimeout(r, waitMs));
       }

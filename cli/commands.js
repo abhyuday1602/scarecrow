@@ -22,10 +22,13 @@ import { suggest, normalizeUrl, assertSafeTarget } from "./args.js";
 import { redact } from "./logger.js";
 import { banner } from "./render.js";
 import { isOllamaInstalled, isOllamaRunning, isModelInstalled, startDaemon, waitForDaemon, pullModel, openOllamaTerminal } from "./ollama.js";
+import { comingSoon } from "./coming-soon.js";
+import { parseSuccess, runPassed } from "./success.js";
+import { MAX_STEPS } from "./limits.js";
+import { browserInstallCommand } from "./browser-setup.js";
 
-// Upper bound for --steps. Each step is roughly one vision API call, so an unbounded
-// value is a real (and easily fat-fingered) bill; refuse rather than silently clamp.
-export const MAX_STEPS = 100;
+// Upper bound for --steps (cli/limits.js); refuse rather than silently clamp.
+export { MAX_STEPS };
 
 // --- uploads resolution (moved from index.js) -------------------------------
 // Where `--upload` looks. Mirrors loadEnv()'s precedence: a project-local ./uploads wins
@@ -80,18 +83,35 @@ function resolveUploads(flag, uploadsDir, quiet = false) {
   return out;
 }
 
+// --- model resolution -------------------------------------------------------
+// A model id belongs to one provider. MODEL (env) and a saved `model` are only applied when
+// they were set alongside the provider actually in use — otherwise `--provider gemini` with
+// a saved Claude model would send "claude-…" to Gemini. An explicit --model always wins.
+export function effectiveModel(provider, { flagModel, cfg = {}, defaultModel }) {
+  const env = process.env;
+  const fromEnv = env.MODEL && (!env.PROVIDER || env.PROVIDER === provider) ? env.MODEL : null;
+  const fromCfg = cfg.model && (!cfg.provider || cfg.provider === provider) ? cfg.model : null;
+  return pick(flagModel, fromEnv, fromCfg, null) || defaultModel;
+}
+
 // --- input collection -------------------------------------------------------
 // Resolves every field a run needs, prompting for missing ones when interactive and
 // throwing a clear UserError otherwise. Precedence is flag > env > saved config > default.
 export async function collectInputs(mode, { flags, positionals, config }, { interactive }) {
   const cfg = config || loadConfig();
   const uploadsDir = resolveUploadsDir();
-  const { providerInfo, resolveModel } = await import("../llm.js");
+
+  // Gated features (cli/coming-soon.js): say so up front instead of silently half-working.
+  for (const name of ["record", "a11y"]) {
+    if (flags[name] && !flags.json) console.error(c.yellow(`${sym.warn} ${comingSoon(name)} Ignoring --${name}.`));
+  }
+  const { providerInfo } = await import("../llm.js");
 
   // provider + model
   const provider = pick(flags.provider, process.env.PROVIDER, cfg.provider, null) || detectProvider() || "anthropic";
-  try { providerInfo(provider); } catch (e) { throw new UserError(e.message); }
-  const model = pick(flags.model, process.env.MODEL, cfg.model, null) || resolveModel(provider);
+  let info;
+  try { info = providerInfo(provider); } catch (e) { throw new UserError(e.message); }
+  const model = effectiveModel(provider, { flagModel: flags.model, cfg, defaultModel: info.defaultModel });
 
   // url
   let url = flags.url || positionals[0];
@@ -162,6 +182,7 @@ export async function collectInputs(mode, { flags, positionals, config }, { inte
   // Device viewport preset
   const device = pick(flags.device, undefined, cfg.device, "desktop");
 
+
   return {
     url,
     personaKey,
@@ -170,11 +191,11 @@ export async function collectInputs(mode, { flags, positionals, config }, { inte
     steps,
     glance: mode === "glance",
     full: !!full,
-    success: typeof flags.success === "string" ? flags.success : null,
+    success: validSuccess(flags.success),
     headed: !!headed,
     device,
-    record: !!flags.record,
-    a11y: !!flags.a11y,
+    record: false, // coming soon — see cli/coming-soon.js
+    a11y: false,   // coming soon — see cli/coming-soon.js
     ci: !!flags.ci,
     quiet: !!flags.quiet || !!flags.json,
     json: !!flags.json,
@@ -186,6 +207,13 @@ export async function collectInputs(mode, { flags, positionals, config }, { inte
     logResponses: flags["log-responses"] !== false,
     cfg: { provider, model },
   };
+}
+
+// --success: validated up front so a typo'd regex fails before the browser launches.
+function validSuccess(spec) {
+  if (typeof spec !== "string") return null;
+  try { parseSuccess(spec); } catch (e) { throw new UserError(e.message); }
+  return spec.trim();
 }
 
 function printRunSummary(inputs) {
@@ -204,7 +232,9 @@ function printRunSummary(inputs) {
   );
 }
 
-// Shared driver: collect → (optionally confirm) → ensure Ollama ready → run → handle --ci.
+// Ollama pre-flight for the plain CLI: install, start and pull as needed. Every decline or
+// failure throws a UserError, so the run stops here instead of launching a browser against
+// a model that can't answer.
 async function ensureOllamaReadyCli(provider, model) {
   if (provider !== "ollama") return;
 
@@ -214,12 +244,10 @@ async function ensureOllamaReadyCli(provider, model) {
   // Step 1: install if missing
   if (!isOllamaInstalled()) {
     if (!isInteractive()) {
-      console.error(c.yellow("Ollama is not installed. Install it from https://ollama.com/download"));
-      console.error(c.dim("Then run `ollama serve` and `ollama pull ") + model + c.dim("` before your next run."));
-      return;
+      throw new UserError(`Ollama is not installed. Install it from https://ollama.com/download, then run \`ollama serve\` and \`ollama pull ${model}\`.`);
     }
     const ok = await confirm("Ollama is not installed. Install it now?", true);
-    if (!ok) { console.error(c.yellow("Aborting. Install Ollama manually from https://ollama.com/download")); return; }
+    if (!ok) throw new UserError("Ollama is required for --provider ollama. Install it from https://ollama.com/download.");
 
     openOllamaTerminal("install");
     console.error(c.dim("⏳ Installation running in a new terminal. Waiting for it to complete..."));
@@ -231,10 +259,7 @@ async function ensureOllamaReadyCli(provider, model) {
       process.stderr.write(".");
     }
     console.error("");
-    if (!installed) {
-      console.error(c.yellow("Timed out waiting for Ollama installation. Install manually from https://ollama.com/download"));
-      return;
-    }
+    if (!installed) throw new UserError("Timed out waiting for the Ollama installation. Install it manually from https://ollama.com/download.");
     console.error(c.dim("Ollama installed."));
   }
 
@@ -242,7 +267,7 @@ async function ensureOllamaReadyCli(provider, model) {
   if (!(await isOllamaRunning())) {
     if (isInteractive()) {
       const ok = await confirm("Ollama is installed but not running. Start the daemon?", true);
-      if (!ok) { console.error(c.yellow("Aborting. Run `ollama serve` manually before your next run.")); return; }
+      if (!ok) throw new UserError("Ollama isn't running. Start it with `ollama serve`, then run again.");
     }
 
     console.error(c.dim("Starting Ollama server..."));
@@ -251,8 +276,7 @@ async function ensureOllamaReadyCli(provider, model) {
     if (ready) {
       console.error(c.dim("Ollama is ready."));
     } else {
-      console.error(c.yellow("Could not connect to Ollama. Make sure `ollama serve` is running."));
-      return;
+      throw new UserError("Could not connect to Ollama. Make sure `ollama serve` is running.");
     }
   }
 
@@ -260,11 +284,11 @@ async function ensureOllamaReadyCli(provider, model) {
   if (!(await isModelInstalled(model))) {
     if (isInteractive()) {
       const ok = await confirm(`Model "${model}" is not pulled. Pull it now?`, true);
-      if (!ok) { console.error(c.yellow(`Aborting. Run \`ollama pull ${model}\` manually before your next run.`)); return; }
+      if (!ok) throw new UserError(`Model "${model}" isn't pulled. Run \`ollama pull ${model}\`, then run again.`);
     }
 
     console.error(c.dim(`Pulling model "${model}" — this may take a while...`));
-    await new Promise((resolve) => {
+    await new Promise((resolve, reject) => {
       const proc = pullModel(model, (p) => {
         if (p.phase === "pulling" && p.percent !== undefined) {
           process.stderr.write(`\r${c.dim(`  ${p.percent}% · ${p.speed || ""} · ${p.eta || ""}`)}`);
@@ -273,13 +297,15 @@ async function ensureOllamaReadyCli(provider, model) {
       proc.on("close", (code) => {
         process.stderr.write("\n");
         if (code === 0) { console.error(c.dim(`Model "${model}" pulled.`)); resolve(); }
-        else { console.error(c.red(`Failed to pull model "${model}"`)); resolve(); }
+        else reject(new UserError(`Failed to pull model "${model}". Try \`ollama pull ${model}\` yourself to see why.`));
       });
     });
   }
 }
 
-export async function runFlow(mode, parsed, ctx, { interactive, confirmRun = false }) {
+// `batch`: called from cmdBatch, which owns the exit code for the whole batch — a single
+// run must not set it, or the last run's result would overwrite the others'.
+export async function runFlow(mode, parsed, ctx, { interactive, confirmRun = false, batch = false }) {
   const inputs = await collectInputs(
     mode,
     { flags: parsed.flags, positionals: parsed.positionals, config: ctx.config },
@@ -306,23 +332,21 @@ export async function runFlow(mode, parsed, ctx, { interactive, confirmRun = fal
     ? await runGlance(inputs, { version: ctx.version })
     : await runSession(inputs, { version: ctx.version });
 
-  if (inputs.ci) {
-    // Skip CI evaluation if the run was aborted or cancelled
-    if (result?.cancelled || result?.aborted) {
+  // Pass/fail (cli/success.js runPassed): an objective --success check decides task
+  // completion when given; any high-severity finding fails. A cancelled run has no verdict.
+  const cancelled = !!(result?.cancelled || result?.aborted);
+  const passed = cancelled ? null
+    : runPassed({ findings: result?.findings, assertion: result?.assertion, glance: inputs.glance });
+  if (inputs.ci && !batch) {
+    if (cancelled) {
       console.error(c.dim("\n--ci: run was cancelled, skipping pass/fail evaluation"));
-      process.exitCode = 0;
     } else {
-      const f = result?.findings;
-      // For glance mode, only check for high-severity findings (skip wouldCompleteTask)
-      // For session mode, check both task completion and high-severity findings
-      const passed = inputs.glance
-        ? !(f?.findings || []).some((x) => x.severity === "high")
-        : !!f && f.wouldCompleteTask === "yes" && !(f.findings || []).some((x) => x.severity === "high");
       process.exitCode = passed ? 0 : 1;
-      console.error(c.dim(`\n--ci: exiting ${passed ? 0 : 1} (task: ${f?.wouldCompleteTask ?? "unknown"})`));
+      const decidedBy = result?.assertion ? `objective check ${result.assertion.passed ? "passed" : "failed"}` : `task: ${result?.findings?.wouldCompleteTask ?? "unknown"}`;
+      console.error(c.dim(`\n--ci: exiting ${passed ? 0 : 1} (${decidedBy})`));
     }
   }
-  return result;
+  return { ...result, passed };
 }
 
 export const cmdRun = (parsed, ctx) =>
@@ -358,7 +382,7 @@ export async function cmdBatch(parsed, ctx) {
   // url/persona/task may come from the entry or from CLI-level flags (which act as
   // defaults for every entry). Unknown fields warn and are ignored; only genuinely
   // missing requirements block the batch.
-  const KNOWN_BATCH_FIELDS = ["url", "persona", "task", "steps", "device", "headed", "record"];
+  const KNOWN_BATCH_FIELDS = ["url", "persona", "task", "steps", "device", "headed"];
   const errors = [];
   const warnings = [];
 
@@ -392,7 +416,7 @@ export async function cmdBatch(parsed, ctx) {
     for (const e of errors) console.error(`  ${c.red(sym.err)} ${e}`);
     console.error(`\n${c.dim("Each entry needs url, persona, and task (inherited from CLI flags if set there):")}`);
     console.error(c.dim(`  { "url": "https://example.com", "persona": "novice", "task": "find pricing",`));
-    console.error(c.dim(`    "steps": 6, "device": "mobile", "headed": true, "record": true }`));
+    console.error(c.dim(`    "steps": 6, "device": "mobile", "headed": true }`));
     console.error();
     throw new UserError(`Batch file has ${errors.length} validation error(s) — fix and retry`);
   }
@@ -415,8 +439,8 @@ export async function cmdBatch(parsed, ctx) {
         flags: { ...parsed.flags, ...overrides },
         positionals: run.url ? [run.url] : parsed.positionals,
       };
-      const result = await runFlow("run", batchParsed, ctx, { interactive: false });
-      results.push({ ...run, result, success: true });
+      const result = await runFlow("run", batchParsed, ctx, { interactive: false, batch: true });
+      results.push({ ...run, result, success: true, passed: result?.passed });
     } catch (e) {
       console.error(c.red(`  Failed: ${redact(e.message)}`));
       results.push({ ...run, error: e.message, success: false });
@@ -428,8 +452,11 @@ export async function cmdBatch(parsed, ctx) {
   const failed = results.length - succeeded;
   console.log(`\n${c.bold("BATCH COMPLETE")}: ${c.green(`${succeeded} succeeded`)} · ${c.red(`${failed} failed`)}`);
 
-  if (parsed.flags.ci && failed > 0) {
-    process.exitCode = 1;
+  if (parsed.flags.ci) {
+    // Fails if ANY run errored or failed its pass/fail check, not just the last one.
+    const failing = results.filter((r) => !r.success || r.passed === false).length;
+    process.exitCode = failing > 0 ? 1 : 0;
+    console.error(c.dim(`\n--ci: ${failing} of ${results.length} run(s) failed — exiting ${failing > 0 ? 1 : 0}`));
   }
 
   return results;
@@ -503,9 +530,9 @@ export async function cmdDoctor(ctx) {
     const { chromium } = await import("playwright");
     const exe = chromium.executablePath();
     const ok = !!exe && existsSync(exe);
-    add(ok ? "ok" : "err", "Playwright Chromium", ok ? exe : "not installed → npx playwright install chromium");
+    add(ok ? "ok" : "err", "Playwright Chromium", ok ? exe : `not installed → ${browserInstallCommand()}`);
   } catch {
-    add("err", "Playwright Chromium", "not installed → npx playwright install chromium");
+    add("err", "Playwright Chromium", `not installed → ${browserInstallCommand()}`);
   }
 
   if (ctx.envFiles.length) {
@@ -526,10 +553,10 @@ export async function cmdDoctor(ctx) {
   }
 
   const keys = presentKeys();
-  const { resolveModel } = await import("../llm.js");
+  const { providerInfo } = await import("../llm.js");
   const provider = process.env.PROVIDER || ctx.config.provider || detectProvider() || "anthropic";
   let model = "?";
-  try { model = process.env.MODEL || ctx.config.model || resolveModel(provider); } catch { /* unknown provider */ }
+  try { model = effectiveModel(provider, { cfg: ctx.config, defaultModel: providerInfo(provider).defaultModel }); } catch { /* unknown provider */ }
   // Local providers (Ollama) need no API key; key-based providers require a key to be present.
   const ready = isLocalProvider(provider) || keys.length > 0;
   const note = isLocalProvider(provider) ? "  (local — ensure `ollama serve` is running)" : ready ? "" : "  (no key set!)";
@@ -745,58 +772,11 @@ export async function cmdDiff(parsed) {
 }
 
 // --- resume command --------------------------------------------------------
-export async function cmdResume(parsed, _ctx) {
-  const { loadAllSessions, loadSessionState, generateRerunCommand } = await import("./resume.js");
-
-  // List past sessions
-  if (parsed.flags.list) {
-    const sessions = loadAllSessions();
-    if (sessions.length === 0) {
-      console.log(c.dim("No sessions found in runs/ directory."));
-      return;
-    }
-    console.log(c.bold("Sessions:\n"));
-    for (const session of sessions) {
-      const statusColor = session.status === "completed" ? c.green : c.yellow;
-      const counts = session.findingCount
-        ? ` · ${session.findingCount} finding${session.findingCount === 1 ? "" : "s"}${session.highCount ? ` (${session.highCount} high)` : ""}`
-        : "";
-      console.log(`  ${c.cyan(session.display)} ${statusColor(`[${session.status}]`)}${c.dim(counts)}`);
-      console.log(`    ${c.dim(session.runDir)}`);
-      if (session.timestamp) console.log(`    ${c.dim(new Date(session.timestamp).toLocaleString())}`);
-      console.log();
-    }
-    console.log(c.dim("To re-run one: crow resume <directory>"));
-    return;
-  }
-
-  // Resume or re-run a specific session
-  const sessionDir = parsed.flags.session || parsed.positionals[0];
-  if (!sessionDir) {
-    throw new UserError("Usage: crow resume --list | --session <directory> | <directory>");
-  }
-
-  if (!existsSync(sessionDir)) {
-    throw new UserError(`Session directory not found: ${sessionDir}`);
-  }
-
-  const state = loadSessionState(sessionDir);
-  if (!state) {
-    throw new UserError(`No session state found in ${sessionDir}`);
-  }
-
-  const rerunCmd = generateRerunCommand(state);
-  console.log(c.bold("Session state loaded:\n"));
-  console.log(`  ${c.cyan("URL:")} ${state.inputs?.url || "unknown"}`);
-  console.log(`  ${c.cyan("Persona:")} ${state.inputs?.personaKey || "unknown"}`);
-  console.log(`  ${c.cyan("Goal:")} ${state.inputs?.task || "unknown"}`);
-  console.log(`  ${c.cyan("Steps completed:")} ${state.currentStep || 0} / ${state.inputs?.steps || 8}`);
-  console.log(`  ${c.cyan("Outcome:")} ${state.outcome || "incomplete"}`);
-  console.log();
-  console.log(c.bold("To re-run this session:\n"));
-  console.log(`  ${c.green(rerunCmd)}`);
-  console.log();
-  console.log(c.dim("Re-running starts a fresh session with the same parameters."));
+// Gated (cli/coming-soon.js): a real resume needs the browser state the run had, which
+// isn't saved. Past runs can be re-run with the same inputs from the interactive UI (/rerun).
+export function cmdResume() {
+  console.log(`${c.yellow(sym.warn)} ${comingSoon("resume")}`);
+  console.log(c.dim("To re-run a past session with the same inputs, start `crow` and use /rerun."));
 }
 
 // --- export command --------------------------------------------------------

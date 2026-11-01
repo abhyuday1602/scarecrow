@@ -1,5 +1,48 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- **Features that didn't work end to end now say "coming soon" instead of silently doing nothing**: video recording (`--record`, `/record`), the accessibility audit (`--a11y`, `/a11y`, which only ever audited the first page), `crow resume` (which only rebuilt a start-over command), and the TUI's `/device` (the CLI's `--device` still works). Each prints a clear notice and is listed under "Coming soon" in the README.
+- **Model replies are structured.** Every call fills in a tool or JSON-schema object instead of prose with a JSON blob on the end, so the action, findings and verdict are never pulled out of free text with a regex. A thought containing `{` used to break parsing. The persona's thoughts still stream live, read out of the structured reply as it arrives.
+- **New actions:** `select` (a dropdown option, by label), `press` (Enter, Escape, Tab, arrow keys), `hover`, and `back`. `type` now sends real keystrokes, so key handlers and input masks fire; `fill()` skipped them and couldn't operate a `<select>` at all.
+- **Element numbering is much less lossy.** Elements covered by something else (a cookie banner, a modal) are no longer numbered. When a clickable card wraps a real button, the button is numbered rather than the card. Elements are ranked by prominence instead of DOM order, so a dense nav can't use up the budget before the main call to action (and the model is told how many weren't numbered). Labels use the accessible name. Open shadow roots and same-origin iframes are searched too.
+- **Clean screenshots.** The numbered badges are only on screen for the screenshot the model picks from (`step-NN.marked.png`). The report's screenshots (`step-NN.png`) are clean, so a persona never critiques a page covered in red markers.
+- **One retry layer.** The SDKs' own retries are off. Rate limits, 5xx/overloaded responses, timeouts and dropped connections are retried in one place, up to 5 attempts, with a visible countdown that says why. Before, the SDK's silent retries stacked under ours: about 30 requests for one rate-limited step, with a 2-minute timeout each.
+- **`--success` is richer and decides the verdict.** It accepts `text:`, `text:/regex/`, `url:`, `url:/regex/` and `selector:<css>`. A bare value still matches the page text or the URL, but the text has to be a whole word now. When given, it decides task completion for `--ci`, the JUnit export and the HTML report, instead of only being a hint to the model.
+- **Findings cite evidence.** Each finding lists the steps it happened at, and `report.md` links them to the screenshots.
+- **Tool failures are separated from site friction.** Actions that fail for automation reasons are marked `[TOOL]`, counted in `report.md` and `findings.json`, and kept out of the findings.
+- `localhost:3000`, `127.0.0.1:…`, private-network IPs and `*.local`/`*.test` hosts now default to `http://` instead of `https://`, which made the main use case, a local dev server, fail with an SSL error.
+- **Run it with `npx github:abhyuday1602/scarecrow`**, straight from GitHub, with no clone and no npm registry publish (`npm install -g github:abhyuday1602/scarecrow` for a permanent `crow`). The registry package isn't published yet; the README leads with the GitHub command and keeps install-from-source for development.
+- The "install the browser" hints (`doctor`, onboarding, errors) now print `npx playwright@<our version> install chromium`. A bare `npx playwright` has no local Playwright to find under an npx install, so it fetched the latest from the registry, which can install a Chromium revision ours can't launch.
+
+### Fixed
+- **The first-run setup wizard crashed before it started.** `onboarding.js` imported `installBrowser`, which `browser-setup.js` never exported, so running `crow` with no arguments on a machine without Chromium or an API key died with a module link error. That's the first thing every new `npx` user hits.
+- **Token counts were missing for Gemini, Groq and Ollama.** Streamed OpenAI-compatible calls never asked for usage (`stream_options.include_usage`), so every step logged `?`. The finish reason was also hardcoded to `stop`; both are now read from the response.
+- **A pasted API key didn't take effect until restart.** SDK clients were cached with the key they were created with; they're now rebuilt when the key changes.
+- **Batch `--ci` passed if the last run passed**, even when earlier runs failed. The batch now fails if any run failed or errored.
+- **The JUnit export put several `<failure>`s in one testcase and reported more failures than tests.** It now has one testcase for task completion plus one per high-severity finding, using the same pass/fail rule as `--ci`.
+- **A saved model was sent to whatever provider you picked**, so `--provider gemini` with a saved Claude model asked Gemini for `claude-…`. A saved or `MODEL` model now only applies to the provider it was saved with.
+- **Flags before the subcommand broke it**: `crow -p skeptic glance x.com` said `Unknown command "glance"`.
+- **Stopping a TUI run ended it as an error.** Stopping aborts the in-flight model call, and the run reported that as a failure; it's now a clean cancel.
+- **The TUI's `/rerun` picker never found any sessions**; it looked in `./runs` instead of the config directory.
+- **Every run after the first in one process (TUI, batch) logged into the first run's log file.**
+- **The link-local block could be bypassed** with `http://[::ffff:169.254.169.254]/`, a DNS name pointing there, or any link or redirect after the first page. Every request the page makes is now checked, with hostnames resolved first.
+- **Declining the Ollama setup printed "Aborting" and then carried on**, launching the browser against a model that couldn't answer. It now stops the run.
+- "Add more steps?" had no limit; extensions now stop at the 100-step cap, in the TUI too. The run also no longer changes `inputs.steps` mid-run.
+- The browser install used `npx playwright`, which could install a Chromium build our Playwright can't launch; it now runs the bundled Playwright CLI.
+- `crow diff` gave an improved/regressed verdict for runs of different sites, personas or goals; it now says they're not comparable.
+- A corrupt `session-state.json` could turn a finished run into an error and overwrite its findings.
+- `withTimeout` left its timer running after a fast call.
+- The README overstated `--log-responses`; it logs the start of each prompt and response, not the full text.
+- **TUI screen corruption, and how it was found.** The interactive mode would intermittently render garbled or overlapping text when a run finished or a picker opened. It reproduced reliably in a scripted pty harness (`ptyprocess` + `pyte`) that captures what a real terminal shows. The cause was Ink's layout: an ever-growing `justifyContent: "flex-end"` + `overflow: "hidden"` transcript box occasionally made Yoga give sibling rows overlapping positions, and Ink's writer stamps characters without clearing, so fragments of both rows remained. Committed transcript lines now render through `<Static>`, which prints each one once and removes it from later layout passes, so past output also lives in the terminal's real scrollback. The root frame had been pinned to the terminal height to dodge a different Ink quirk, and with `<Static>` that pin made Ink reprint the whole transcript on every keystroke, so it was removed. The live part of the screen (a running step, a picker) is now kept shorter than the terminal; `/clear` actually clears, including Ink's own replay buffer; and short notices like "Press Ctrl+C again to exit" no longer pile up in scrollback.
+
+### Added
+- Engine tests: browser tests against fixture pages (a cookie banner over the CTA, a card wrapping a button, a dropdown form, Enter-to-submit search, a hover menu, shadow DOM, a same-origin iframe, a dense nav), and end-to-end run-loop tests with model replies replayed from a cassette (`SCARECROW_LLM_CASSETTE`, `SCARECROW_LLM_MODE=record|replay`), with no API key or network calls. CI installs Chromium so they run there too.
+- `SECURITY.md`, issue templates (bug, feature, persona) and a pull request template.
+- A release workflow: pushing a version tag runs lint and tests, checks the tag against `package.json`, and creates a GitHub Release with generated notes. Publishing to npm (with provenance) is opt-in through the `NPM_PUBLISH` repository variable, so tags work before npm is set up.
+- `CONTRIBUTING.md` and a Code of Conduct (Contributor Covenant 2.1), a Contributors section crediting Claude as a pair-programming contributor, README badges (CI, license, Node), and a Dependabot config that groups minor and patch updates into one weekly PR per group instead of one per package.
+
 ## 0.2.0 — 2026-08-09
 
 ### Changed
@@ -34,112 +77,17 @@
 
 ## 0.1.0 — 2026-07-08
 
-### Summary
-- First public release
-- 119/119 tests passing, ESLint clean, `npm audit` 0
-- Full feature set including AI-powered synthetic user testing, AI headless runs, TUI mode, automated screenshots, commentary transcription, AI-driven Test("Scrolling"...)
+First public release.
 
-### Major Features
-**Core Capabilities**
-
-- **Click-through sessions** — AI-driven persona walks through your site toward a goal, clicking and typing like a real user
-- **Glance mode** — fast, oneshot usability critique for quick validation
-- **Real-time streaming** — show AI reasoning and output live in terminal without blocking
-- **TUI** (Text User Interface) — full-screen, Claude Code-style REPL with live viewing
-- **Personas** — 5 built-in AI user profiles (novice, power, skeptic, rushed, access) with second‑person goal descriptions, plus unlimited custom ones
-- **Device emulation** — test on desktop, tablet, or mobile viewport presets
-- **Upload testing** — `--upload` flag lets personas complete file‑upload flows
-- **Interactive guided mode** — CLI wizard for first‑time setup
-
-**Lifecycle & Session Management**
-
-- **Session persistence** — resume interrupted runs; store `./runs/<ts>/results`
-- **Session comparison** — `crow diff` side‑by‑side diff of two runs
-- **Batch testing** — `--batch <json>` for automated multi‑scenario runs
-- **Video recording** — optional `--record` saves session as `./runs/<ts>/recording.webm`
-- **Accessibility** — built‑in WCAG audit (`--a11y`) with violation listing
-
-**Provider Flexibility**
-
-- **Multiple LLMs** — native OpenAI‑compatible clients (Anthropic, Gemini, Groq)
-- **Live model listing** — fetch current models per provider via `/provider` picker
-- **Ollama** — local, key‑less deployment with integrated daemon control (`/ollama` commands)
-
-**Theming**
-
-- **9 curated themes** (cursor, discord, claude, tokyo, catppuccin, gruvbox, ocean, rose, gotham)
-- **Full‑screen background** — OSC 11 terminal background painting for immersive theme switching
-- **Live picker preview** — see theme changes instantly, cancel/accept as needed
-
-**Smart UI**
-
-- **Spinner animation** — brain‑friendly loading indicators (braille spinner in TTY, plain line in CI)
-- **Streaming printer** — spinner clears on first token; dimmed, flowing prose
-- **Status footer** — concise context (mode/provider/persona/urlhost + actionable hints)
-- **Slash commands** — `/help`, `/commands`, `/persona`, `/provider`, `/theme`, `/resume`, `/clear` etc.
-- **Inline pickers** — persona/provider/theme/resume pickers right above the input box (no mode swaps)
-- **Guided collect** — focused field entry with live context and CONFIRM step
-
-**Quality & Reliability**
-
-- **854 lines of tests** across 9 files — 119 passed, 0 failures
-- **ESLint** with style guardrails (60 rules, custom per‑context globals)
-- **Security hardening** — env‑var allowlist, masked key input, XSS‑safe HTML export
-- **Git hygiene** — `uploads/` and PII tests ignored, 0 secrets in history
-- **Production‑ready packaging** — `bin: crow`, `files:` allowlist, `publishConfig: public`
-
-### Notable Backlog Items
-- Scope for future `--upload-mode=queue` (per‑picker file consumption)
-- Session reuse via `storageState` to avoid password prompts
-- Domain allowlist / off‑domain navigation guard
-- `--redact` / transcript scrubbing utilities
-- Per‑field file mapping (route specific files to specific controls)
-- Drag‑and‑drop support via synthetic `DataTransfer`
-- Generating throwaway fixture files on the fly (`--upload=auto:pdf`)
-
-### Implementation Highlights
-
-#### TUI Architecture
-- Single‑scroll transcript (`<Static>`), fixed input + status footer
-- **No mode swaps** — every control in one continuous flow (Claude Code feel)
-- Input ownership limited to **Prompt** and active picker; global handler only Ctrl+C/Esc
-- Inline themed bands (`Bar`) using `<Text backgroundColor>`; reusable across components
-- Full‑screen OSC 11 theme background with graceful degradation
-
-#### Streaming & Concurrency
-- Per‑provider streaming adapters (Anthropic `messages.stream()`, OpenAI‑compatible `stream: true`)
-- `stopAtDelimiter()` leak‑proof: holds back partial multi‑char delimiter across chunks
-- `streamPrinter()`: spinner clears on first token; dimmed, incremental output; `end()` resets line
-- Reasoning shown live (`THINKING OUT LOUD`), JSON actions parsed silently
-
-#### Security & Plumbing
-- `.env` allowlist (`*_API_KEY`, `PROVIDER`, `MODEL`) blocks arbitrary env var poisoning
-- `browser.js` file‑chooser guard: upload only when the agent’s own click is in flight
-- Prompt‑injection blast radius limited by fresh, cookie‑less Playwright contexts
-- VS Code style workspace: `cli/` (UI/command), `llm.js` (clients), `agent.js` (orchestration), `browser.js` (playwright)
-
-#### Developer Experience
-- `crow init` creates `.env` and explains keys with masked paste
-- `crow doctor` validates Node, browser, and keys; warns on loose `.env` perms
-- `crow export html|junit|json` for CI integration; HTML is self‑contained, JUnit XML for test infra
-- `crow personas` lists/explains each AI user profile; `/persona-add` wizard for custom ones
-- `crow config set/get` for provider, model, persona, steps, etc. (flag > env > saved > default)
-- `crow resume` / TUI `/resume` picker – view + rerun past sessions
-- `crow diff` — side‑by‑side diff of two runs (screenshot thumb + textual findings)
-- `crow glance <url>` — quick sanity check in seconds (single AI call, no interactive confirmation)
-
-### Development Process
-All work uses a feature‑branch workflow; audit and security checks run automatically on `npm test`. The codebase has a 39‑file include list for production (everything needed to run). Node 18+ required (React 18, Ink 5); upgrades are gated behind careful testing.
-
-### Contributing
-See `README-DETAILED.md` for full docs. Custom personas can be edited in `personas.js` or added via the `/persona-add` wizard. Report issues with the fully‑formed command run via `crow doctor`.
-
-### Known Limitations
-- Synthetic users over‑agree, can’t feel genuine frustration, may misread pages
-- No drag‑and‑drop upload zones (needs synthetic `DataTransfer`)
-- File‑chooser interception only for agent‑triggered clicks; hidden‑input attacks still require an agent click
-- SSRF / internal URLs are reachable via `--url` (fine for CLI driving trusted sites; risk rises if wrapped as a service)
-- No per‑field file mapping (all upload files offered to every picker)
-
-### License
-[Apache 2.0](LICENSE) © 2026 abhyuday — open for use, modify, and commercial distribution.
+- `crow <url>` runs a full click-through: a persona works toward a goal in a real
+  Playwright browser, choosing from numbered elements on each screenshot, then writes a
+  debrief with findings, severity and suggested fixes.
+- `crow glance` gives a single-screenshot first impression, with `--full` for the whole page.
+- Built-in personas, plus custom ones from the TUI's `/persona-add` wizard.
+- Anthropic, Gemini and Groq providers, with streaming output and rate-limit retries.
+- An interactive TUI (`crow` with no arguments) with slash commands, themes and an inline guided setup.
+- `crow init`, `crow doctor`, `crow config`, `crow personas`, `crow export` (HTML, JUnit,
+  JSON), `crow diff` and `crow resume`.
+- `--upload` attaches files from `uploads/`, but only to file pickers that the agent's own
+  click opened.
+- Run artifacts: a screenshot per step, `findings.json` and `report.md`.

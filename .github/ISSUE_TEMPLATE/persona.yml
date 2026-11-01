@@ -1,0 +1,34 @@
+name: Persona proposal
+description: Propose a new built-in persona, or a change to an existing one
+labels: [persona]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A persona's description *is* its prompt (see "Personas" in the README). Proposals
+        are most useful when they describe specific behaviour, not demographics.
+  - type: input
+    id: key
+    attributes:
+      label: Persona key
+      placeholder: e.g. screenreader
+    validations:
+      required: true
+  - type: textarea
+    id: who
+    attributes:
+      label: Who they are and how they browse
+      description: How they read a page, pick what to click, when they give up, and how they judge severity.
+    validations:
+      required: true
+  - type: textarea
+    id: catches
+    attributes:
+      label: What would this persona catch that the existing ones miss?
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Example runs
+      description: Optional. Findings from trying the persona with `/persona-add`, and how they differed from an existing persona's.

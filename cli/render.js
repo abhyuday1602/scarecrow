@@ -1,6 +1,6 @@
 // cli/render.js — turning run data into terminal output and the Markdown report.
-// header / renderFindings / describe / buildReport are moved verbatim from the old
-// index.js (same output); summary() and banner() are new presentation helpers.
+// header / renderFindings / describe / buildReport render a run; summary() and banner()
+// are the shared presentation helpers.
 
 import { c, sym, rule, panel } from "./ui.js";
 import { BRAND } from "./brand.js";
@@ -38,6 +38,7 @@ export function renderFindings(findings) {
     console.log(`${i + 1}. ${tag} ${c.bold(f.issue)}`);
     if (f.heuristic) console.log(`   ${c.dim("heuristic:")} ${f.heuristic}`);
     if (f.fix) console.log(`   ${c.dim("fix:")} ${f.fix}`);
+    if (f.steps?.length) console.log(`   ${c.dim("seen at:")} step ${f.steps.join(", ")}`);
     console.log();
   });
 }
@@ -46,6 +47,10 @@ export const describe = (a) => {
   switch (a.action) {
     case "click": return `click #${a.target}`;
     case "type": return `type "${a.text ?? ""}" → #${a.target}`;
+    case "select": return `select "${a.option ?? a.text ?? ""}" in #${a.target}`;
+    case "press": return `press ${a.key ?? a.text ?? "?"}`;
+    case "hover": return `hover #${a.target}`;
+    case "back": return "go back";
     case "scroll": return "scroll down";
     case "scrollup": return "scroll up";
     case "wait": return "wait";
@@ -77,8 +82,9 @@ export function summary({ findings, outcome, assertion, files = [] }) {
   return panel("SUMMARY", lines);
 }
 
-// Detailed Markdown walkthrough of the session (moved verbatim from index.js).
-export function buildReport({ inputs, outcome, finalUrl, assertion, steps, reflection, findings }) {
+// Detailed Markdown walkthrough of the session: per-step screenshots (clean, plus the
+// numbered copy the model chose from) and findings linked to the steps they cite.
+export function buildReport({ inputs, outcome, finalUrl, assertion, steps, reflection, findings, toolFailures = 0 }) {
   const bq = (t) =>
     (String(t || "").trim() || "(none)").split("\n").map((l) => `> ${  l}`).join("\n");
   const L = [];
@@ -91,7 +97,9 @@ export function buildReport({ inputs, outcome, finalUrl, assertion, steps, refle
   L.push(`- **Outcome:** ${outcome}`);
   L.push(`- **Final URL:** ${finalUrl}`);
   if (assertion)
-    L.push(`- **Objective check:** ${assertion.passed ? "PASS" : "FAIL"} — marker "${assertion.marker}" ${assertion.passed ? "found" : "not found"}`);
+    L.push(`- **Objective check:** ${assertion.passed ? "PASS" : "FAIL"} — \`${assertion.kind ? `${assertion.kind}: ` : ""}${assertion.marker}\` ${assertion.passed ? "matched" : "never matched"}`);
+  if (toolFailures)
+    L.push(`- **Tool failures:** ${toolFailures} action(s) failed for reasons of the testing tool (marked [TOOL] below), not the site`);
   L.push(`- **Generated:** ${new Date().toISOString()}`);
   L.push("", "---", "");
 
@@ -102,7 +110,7 @@ export function buildReport({ inputs, outcome, finalUrl, assertion, steps, refle
     L.push(bq(s.thought), "");
     L.push(`- **Action:** ${s.action}`);
     if (s.result) L.push(`- **Result:** ${s.result}`);
-    L.push(`- **Screenshot:** [${s.shot}](${s.shot})`, "");
+    L.push(`- **Screenshot:** [${s.shot}](${s.shot}) · [with element numbers](${s.shot.replace(/\.png$/, ".marked.png")})`, "");
   }
 
   L.push("---", "");
@@ -119,6 +127,8 @@ export function buildReport({ inputs, outcome, finalUrl, assertion, steps, refle
     L.push(`${i + 1}. **[${String(f.severity).toUpperCase()}] ${f.issue}**`);
     if (f.heuristic) L.push(`   - Heuristic: ${f.heuristic}`);
     if (f.fix) L.push(`   - Fix: ${f.fix}`);
+    const ev = (f.steps || []).map((n) => steps.find((s) => s.n === n)).filter(Boolean);
+    if (ev.length) L.push(`   - Evidence: ${ev.map((s) => `[step ${s.n}](${s.shot})`).join(", ")}`);
   });
   L.push("");
 

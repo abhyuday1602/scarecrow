@@ -1,0 +1,14 @@
+<!doctype html><meta charset="utf-8"><title>Shadow DOM</title>
+<main>
+  <signup-widget></signup-widget>
+  <p id="out"></p>
+</main>
+<script>
+  customElements.define("signup-widget", class extends HTMLElement {
+    connectedCallback() {
+      const root = this.attachShadow({ mode: "open" });
+      root.innerHTML = '<button id="b">Join the waitlist</button>';
+      root.getElementById("b").addEventListener("click", () => { document.getElementById("out").textContent = "joined"; });
+    }
+  });
+</script>

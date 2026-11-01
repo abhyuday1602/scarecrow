@@ -3,11 +3,21 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { runPassed, taskCompleted } from "./success.js";
+
+// findings.json spreads the model's findings object into the top level; rebuild the
+// pieces the shared pass/fail rule (cli/success.js) expects.
+const verdictOf = (data) => {
+  const findings = { wouldCompleteTask: data.wouldCompleteTask, findings: data.findings || [] };
+  const glance = data.mode === "glance";
+  return { findings, assertion: data.assertion || null, glance, passed: runPassed({ findings, assertion: data.assertion, glance }) };
+};
 
 // Generate self-contained HTML report
 export function generateHTML(findingsPath) {
   const data = JSON.parse(readFileSync(findingsPath, "utf-8"));
-  const { url, persona, goal, outcome, finalUrl, findings = [], a11y, routeHistory } = data;
+  const { url, persona, goal, finalUrl, findings = [], a11y, routeHistory } = data;
+  const verdict = verdictOf(data);
 
   const findingsHTML = findings.length
     ? findings.map((f) => `
@@ -86,9 +96,8 @@ export function generateHTML(findingsPath) {
       <span><strong>Persona:</strong> ${escapeHTML(persona)}</span>
       <span><strong>Goal:</strong> ${escapeHTML(goal)}</span>
     </div>
-    <div class="outcome ${outcome === "reached the goal" ? "passed" : outcome === "gave up / bounced" ? "failed" : "unsure"}">
-      ${outcome === "reached the goal" ? "PASSED" : outcome === "gave up / bounced" ? "FAILED" : "INCONCLUSIVE"}
-    </div>
+    <div class="outcome ${verdict.passed ? "passed" : "failed"}">${verdict.passed ? "PASSED" : "FAILED"}</div>
+    ${verdict.assertion ? `<div class="meta" style="margin-top:8px">Objective check: ${escapeHTML(verdict.assertion.kind ? `${verdict.assertion.kind}: ` : "")}${escapeHTML(verdict.assertion.marker)} — ${verdict.assertion.passed ? "passed" : "failed"}</div>` : ""}
   </header>
 
   <section>
@@ -117,39 +126,47 @@ export function generateHTML(findingsPath) {
 </html>`;
 }
 
-// Generate JUnit XML for CI integration
+// Generate JUnit XML for CI integration. One testcase for task completion (decided by the
+// objective --success check when the run had one, else the model's verdict) plus one per
+// high-severity finding; each testcase has at most one <failure>, and the counts agree with
+// `--ci` because both use runPassed/taskCompleted from cli/success.js.
 export function generateJUnit(findingsPath) {
   const data = JSON.parse(readFileSync(findingsPath, "utf-8"));
   const { url, persona, goal, outcome, findings = [] } = data;
+  const v = verdictOf(data);
+  const cases = [];
+
+  if (!v.glance) {
+    const done = taskCompleted(v);
+    const how = v.assertion
+      ? `objective check ${v.assertion.kind ? `${v.assertion.kind}: ` : ""}${v.assertion.marker} ${v.assertion.passed ? "passed" : "failed"}`
+      : `model verdict: ${data.wouldCompleteTask ?? "unknown"}`;
+    cases.push({
+      name: `Task completion: ${goal}`,
+      failure: done ? null : {
+        message: `Task not completed (${how})`,
+        body: [`Goal: ${goal}`, `Persona: ${persona}`, `Outcome: ${outcome}`, `Decided by: ${how}`].join("\n"),
+      },
+    });
+  }
+  for (const f of findings.filter((x) => x.severity === "high")) {
+    cases.push({
+      name: `High severity: ${f.issue}`,
+      failure: { message: `High severity finding: ${f.issue}`, body: `${f.issue}\nHeuristic: ${f.heuristic}\nFix: ${f.fix}` },
+    });
+  }
 
   // Failure bodies are escaped as XML text, not wrapped in CDATA — a finding
   // containing "]]>" would otherwise terminate the CDATA section early.
-  const sessionFailure = outcome !== "reached the goal"
-    ? `<failure message="Task not completed: ${escapeXML(outcome)}">${escapeXML([
-        `Goal: ${goal}`,
-        `Persona: ${persona}`,
-        `Outcome: ${outcome}`,
-        ...findings.map((f) => `[${(f.severity || "unknown").toUpperCase()}] ${f.issue}\n  Fix: ${f.fix}`),
-      ].join("\n"))}</failure>`
-    : "";
-
-  const highFailures = findings
-    .filter((f) => f.severity === "high")
-    .map((f) => `<failure message="High severity finding: ${escapeXML(f.issue)}">${
-      escapeXML(`${f.issue}\nHeuristic: ${f.heuristic}\nFix: ${f.fix}`)
-    }</failure>`)
-    .join("\n      ");
-
-  const testcase = `
-    <testcase name="${escapeXML(goal)}" classname="${escapeXML(url)}" time="0">
-      ${sessionFailure}
-      ${highFailures}
-    </testcase>`;
+  const testcases = cases.map((tc) => `
+    <testcase name="${escapeXML(tc.name)}" classname="${escapeXML(url)}" time="0">${tc.failure
+      ? `\n      <failure message="${escapeXML(tc.failure.message)}">${escapeXML(tc.failure.body)}</failure>\n    `
+      : ""}</testcase>`).join("");
+  const failures = cases.filter((tc) => tc.failure).length;
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <testsuites>
-  <testsuite name="Scarecrow Usability Tests" tests="1" failures="${(outcome !== "reached the goal" ? 1 : 0) + findings.filter((f) => f.severity === "high").length}" errors="0">
-    ${testcase}
+  <testsuite name="Scarecrow Usability Tests" tests="${cases.length}" failures="${failures}" errors="0">${testcases}
   </testsuite>
 </testsuites>`;
 }

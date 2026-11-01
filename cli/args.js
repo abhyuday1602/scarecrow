@@ -34,13 +34,13 @@ const SHARED = {
 const RUN = {
   ...SHARED,
   steps:   { type: "int",    alias: "n", desc: "max actions before stopping (default 8)" },
-  success: { type: "string",             desc: "pass/fail check: text or URL substring to find" },
+  success: { type: "string",             desc: "pass/fail check: text or URL to find; or text:/regex/, url:/regex/, selector:<css>" },
   ci:      { type: "bool",               desc: "exit non-zero on failure or any high-severity finding" },
   out:     { type: "string", alias: "o", desc: "directory for run artifacts (default: ~/.config/scarecrow/runs)" },
   glance:  { type: "bool",               desc: "shortcut: do a glance instead of a session" },
-  record:  { type: "bool",               desc: "save a video recording of the session" },
+  record:  { type: "bool",               desc: "save a video recording of the session (coming soon)" },
   batch:   { type: "string",             desc: "batch config file: JSON array of {url, persona, task, ...} entries" },
-  a11y:    { type: "bool",               desc: "run accessibility audit (axe-core) on each page" },
+  a11y:    { type: "bool",               desc: "run an accessibility audit (axe-core) (coming soon)" },
 };
 
 const GLANCE = {
@@ -52,7 +52,7 @@ export const COMMANDS = {
   run:      { summary: "Full click-through session (the default command)", spec: { ...GLOBAL, ...RUN } },
   glance:   { summary: "One first-impression critique, no click-through",  spec: { ...GLOBAL, ...GLANCE } },
   export:   { summary: "Export findings in HTML, JUnit, or JSON format",   spec: { ...GLOBAL, format: { type: "string", alias: "f", desc: "export format: html | junit | xml | json" }, input: { type: "string", alias: "i", desc: "path to findings.json" }, out: { type: "string", alias: "o", desc: "output directory" } } },
-  resume:   { summary: "Show a past session and the command to re-run it",     spec: { ...GLOBAL, list: { type: "bool", desc: "list past sessions" }, session: { type: "string", desc: "session directory to load" } } },
+  resume:   { summary: "Resume an interrupted session (coming soon)",     spec: { ...GLOBAL, list: { type: "bool", desc: "list past sessions" }, session: { type: "string", desc: "session directory to load" } } },
   diff:     { summary: "Compare two runs and show differences",           spec: { ...GLOBAL, list: { type: "bool", desc: "list all runs in the runs directory" }, run1: { type: "string", desc: "first run directory" }, run2: { type: "string", desc: "second run directory" } } },
   personas: { summary: "List the personas, or show one in detail",          spec: { ...GLOBAL } },
   doctor:   { summary: "Check Node, the browser, keys, and config",         spec: { ...GLOBAL } },
@@ -71,16 +71,28 @@ export const looksLikeUrl = (s) =>
   !/\s/.test(s) &&
   (/^https?:\/\//i.test(s) || /[./]/.test(s) || /:\d/.test(s) || /^localhost\b/i.test(s));
 
-// Default bare hosts to https:// so users can type "acme.com" everywhere a URL is taken.
+// Default bare hosts to a scheme so users can type "acme.com" everywhere a URL is taken:
+// http:// for local and private-network hosts (dev servers are almost always plain HTTP —
+// https://localhost:3000 just fails with an SSL error), https:// for everything else.
 // An input counts as already having an explicit scheme only when the colon isn't
 // immediately followed by digits — "localhost:3000" and "example.com:8080" are the
-// "host:port" shorthand (colon+digits) and still get "https://" prepended, but "file:///x",
+// "host:port" shorthand (colon+digits) and still get a scheme prepended, but "file:///x",
 // "javascript:alert(1)", "data:text/html,…" are left untouched. This matters: an
 // unconditional prepend would otherwise mangle "file:///etc/passwd" into
 // "https://file:///etc/passwd" *before* assertSafeTarget (below) ever sees the real scheme,
 // silently defeating that check.
 const HAS_EXPLICIT_SCHEME = /^[a-zA-Z][a-zA-Z0-9+.-]*:(\/\/|[^0-9])/;
-export const normalizeUrl = (u) => (HAS_EXPLICIT_SCHEME.test(u) ? u : `https://${u}`);
+export const normalizeUrl = (u) => (HAS_EXPLICIT_SCHEME.test(u) ? u : `${isLocalHost(u) ? "http" : "https"}://${u}`);
+
+// localhost, *.localhost, *.local, *.test, loopback (127/8, ::1) and RFC1918 ranges.
+function isLocalHost(u) {
+  const host = String(u).replace(/^\[([^\]]+)\].*$/, "$1").split(/[/:?#]/)[0].toLowerCase();
+  if (host === "localhost" || /\.(localhost|local|test)$/.test(host) || host === "::1" || String(u).startsWith("[::1]")) return true;
+  const m = host.match(/^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/);
+  if (!m) return false;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+}
 
 // Reject dangerous navigation targets before the browser ever opens them. Scheme must be
 // http(s) — file://, data:, javascript: etc. would let a malicious/compromised page (or a
@@ -103,10 +115,18 @@ export function assertSafeTarget(u) {
     throw new Error(`Refusing to open a link-local address (${host}) — this range includes cloud metadata endpoints.`);
 }
 
-function isLinkLocal(host) {
-  const v4 = host.match(/^(?:::ffff:)?(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/i);
+// Is this IP literal (v4, v6, or an IPv4-mapped v6 in dotted or hex form) link-local?
+// Covers 169.254.0.0/16 and fe80::/10. The URL parser rewrites "[::ffff:169.254.169.254]"
+// to the hex form "[::ffff:a9fe:a9fe]", so both spellings must be recognised. Also used by
+// browser.js to vet the resolved address of every request a page makes, not just the
+// first URL. Hostnames (non-literals) return false — resolve them first.
+export function isLinkLocal(host) {
+  const h = String(host).replace(/^\[|\]$/g, "").toLowerCase();
+  const v4 = h.match(/^(?:::ffff:)?(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/);
   if (v4) return Number(v4[1]) === 169 && Number(v4[2]) === 254; // 169.254.0.0/16
-  return /^fe[89ab][0-9a-f]:/i.test(host); // IPv6 link-local, fe80::/10
+  const mappedHex = h.match(/^::ffff:([0-9a-f]{1,4}):[0-9a-f]{1,4}$/);
+  if (mappedHex) return parseInt(mappedHex[1], 16) === 0xa9fe; // ::ffff:a9fe:xxxx = 169.254.x.x
+  return /^fe[89ab][0-9a-f]:/.test(h); // IPv6 link-local, fe80::/10
 }
 
 function lev(a, b) {
@@ -132,6 +152,31 @@ export function suggest(word, candidates) {
   return bestD <= Math.max(2, Math.ceil(word.length / 3)) ? best : null;
 }
 
+// Index of the subcommand token, or -1. Skips the values of flags that take one, so in
+// `crow -p skeptic glance x.com` the command is "glance", not the persona "skeptic" (and
+// `-t personas` is a goal, not the personas command). Flag types come from the union of
+// every command's spec, since the command — and so its spec — isn't known yet.
+function commandIndex(argv) {
+  const all = {};
+  for (const cmd of Object.values(COMMANDS)) Object.assign(all, cmd.spec);
+  const aliases = {};
+  for (const [name, def] of Object.entries(all)) if (def.alias) aliases[def.alias] = name;
+  const takesValue = (name) => !!name && Object.hasOwn(all, name) && (all[name].type === "string" || all[name].type === "int");
+
+  for (let i = 0; i < argv.length; i++) {
+    const tok = argv[i];
+    if (tok === "--") return -1;
+    if (tok.startsWith("-") && tok !== "-" && !/^-\d/.test(tok)) {
+      if (tok.includes("=")) continue;
+      const name = tok.startsWith("--") ? tok.slice(2) : aliases[tok.slice(1)];
+      if (takesValue(name)) i++;
+      continue;
+    }
+    if (Object.hasOwn(COMMANDS, tok)) return i;
+  }
+  return -1;
+}
+
 // --- the parser -------------------------------------------------------------
 export function parse(argv) {
   const out = { command: null, positionals: [], flags: {}, errors: [] };
@@ -139,11 +184,10 @@ export function parse(argv) {
   // Command = the first bare token that names a known command. (A bare token that
   // isn't a command — e.g. a URL — is left as a positional for the router.)
   let rest = argv;
-  const firstBare = argv.find((a) => !a.startsWith("-"));
-  if (firstBare && COMMANDS[firstBare]) {
-    out.command = firstBare;
-    const i = argv.indexOf(firstBare);
-    rest = argv.slice(0, i).concat(argv.slice(i + 1));
+  const ci = commandIndex(argv);
+  if (ci >= 0) {
+    out.command = argv[ci];
+    rest = argv.slice(0, ci).concat(argv.slice(ci + 1));
   }
 
   const spec = COMMANDS[out.command || "run"].spec;

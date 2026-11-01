@@ -59,7 +59,34 @@ describe("generateJUnit escaping", () => {
 
   it("counts the session failure plus each high finding", () => {
     const xml = generateJUnit(findingsPath);
-    expect(xml).toContain('failures="2"');
+    expect(xml).toContain('tests="2" failures="2"');
+  });
+});
+
+describe("generateJUnit structure and verdict", () => {
+  const junitFor = (data) => {
+    const p = join(dir, `f-${Math.random().toString(36).slice(2)}.json`);
+    writeFileSync(p, JSON.stringify({ url: "https://a.com", persona: "novice", goal: "sign up", outcome: "reached the goal", findings: [], ...data }));
+    return generateJUnit(p);
+  };
+
+  it("has at most one <failure> per testcase and never more failures than tests", () => {
+    const xml = junitFor({ wouldCompleteTask: "no", findings: [
+      { severity: "high", issue: "a" }, { severity: "high", issue: "b" }, { severity: "low", issue: "c" },
+    ] });
+    for (const tc of xml.split("<testcase").slice(1)) expect((tc.match(/<failure/g) || []).length).toBeLessThanOrEqual(1);
+    expect(xml).toContain('tests="3" failures="3"');
+  });
+
+  it("lets the objective check decide completion over the model's verdict", () => {
+    expect(junitFor({ wouldCompleteTask: "unsure", assertion: { kind: "text", marker: "Thanks", passed: true } }))
+      .toContain('tests="1" failures="0"');
+    expect(junitFor({ wouldCompleteTask: "yes", assertion: { kind: "url", marker: "/done", passed: false } }))
+      .toContain('tests="1" failures="1"');
+  });
+
+  it("glance runs have no completion testcase", () => {
+    expect(junitFor({ mode: "glance", wouldCompleteTask: "no" })).toContain('tests="0" failures="0"');
   });
 });
 
@@ -83,8 +110,13 @@ describe("generateRerunCommand quoting", () => {
   });
 
   it("omits defaults and falsy flags", () => {
-    const cmd = generateRerunCommand({ inputs: { url: "https://a.com", steps: 8, device: "desktop", headed: false } });
+    const cmd = generateRerunCommand({ inputs: { url: "https://a.com", steps: 8, device: "desktop", headed: true } });
     expect(cmd).toBe("crow run 'https://a.com'");
+  });
+
+  it("keeps a headless run headless (headed is the default)", () => {
+    const cmd = generateRerunCommand({ inputs: { url: "https://a.com", headed: false } });
+    expect(cmd).toBe("crow run 'https://a.com' --no-headed");
   });
 
   // Regression: inputs.upload is the *resolved* array, and [] is truthy — so every

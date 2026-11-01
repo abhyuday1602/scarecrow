@@ -55,8 +55,8 @@ export async function startTui(ctx, flags = {}) {
   registerCleanup(resetTerminalBg, { sync: true });
   process.once("SIGHUP", () => process.exit(129));
 
-  // Clear the screen once so the fixed-height frame starts at the top; Ink then owns and
-  // redraws that block in place.
+  // Clear the screen once so the transcript (header band first) starts at the top; Ink then
+  // appends <Static> lines and redraws the live frame beneath them.
   process.stdout.write("\x1b[2J\x1b[3J\x1b[H");
 
   const instance = render(html`<${ThemeProvider} initialTheme=${theme}><${App} ctx=${ctx} initialSession=${initialSession} /><//>`, {

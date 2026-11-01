@@ -1,0 +1,52 @@
+name: Bug report
+description: Something in Scarecrow doesn't work the way it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please **don't** paste API keys, real credentials, or
+        screenshots of private sites. For security problems, use the private report
+        described in SECURITY.md instead of an issue.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you expected, and what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command
+      description: The exact `crow` command, or the TUI steps you took.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`crow doctor` output"
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Scarecrow version
+      description: Output of `crow --version`
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider
+      options: [anthropic, gemini, groq, ollama]
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Relevant log lines
+      description: From the run's log file. Check them for anything sensitive first.
+      render: text

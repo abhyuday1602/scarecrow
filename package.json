@@ -1,7 +1,7 @@
 {
   "name": "@dumbduck/scarecrow",
   "version": "0.2.0",
-  "description": "Scarecrow — synthetic user testing from the terminal. A persona does a real click-through of your site and reports the usability friction it hit. Works with Anthropic, Gemini, or Groq models.",
+  "description": "Scarecrow — synthetic user testing from the terminal. A persona does a real click-through of your site and reports the usability friction it hit. Works with Anthropic, Gemini, Groq, or local Ollama models.",
   "type": "module",
   "main": "index.js",
   "bin": {
@@ -30,9 +30,14 @@
     "anthropic",
     "gemini",
     "groq",
+    "ollama",
     "agent"
   ],
   "author": "abhyuday",
+  "contributors": [
+    "Abhyuday Deshpande (https://github.com/abhyuday1602)",
+    "Claude (AI pair programmer by Anthropic, via Claude Code) (https://claude.com/claude-code)"
+  ],
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

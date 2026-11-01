@@ -2,10 +2,14 @@
 // optional argument hint (for the menu), a one-line summary, and a handler that acts on
 // the `api` the App provides. This is the single source of truth for both the
 // autocomplete menu and `/help`. Validation reuses the same coercers the CLI uses.
+// `comingSoon: "<key>"` marks a command whose feature is gated in cli/coming-soon.js: it
+// stays listed (with a "coming soon" tag) and its handler only explains that.
 
 import { allPersonas, removePersona } from "../personas-store.js";
 import { SETTINGS } from "../config.js";
 import { normalizeUrl } from "../args.js";
+import { comingSoon } from "../coming-soon.js";
+import { parseSuccess } from "../success.js";
 
 export const COMMANDS = [
   { name: "walkthrough", summary: "step-by-step click-through mode",
@@ -73,21 +77,8 @@ export const COMMANDS = [
     handler: (api) => { api.setSession({ headed: true }); api.message("browser → headed (visible)"); } },
   { name: "headless", summary: "hide the browser window during runs",
     handler: (api) => { api.setSession({ headed: false }); api.message("browser → headless"); } },
-  { name: "device", args: "[preset]", summary: "viewport preset: mobile | tablet | desktop | desktop-lg | desktop-xl",
-    handler: (api, arg) => {
-      const devices = [
-        { value: "desktop", label: "desktop", hint: "1280×800" },
-        { value: "desktop-lg", label: "desktop-lg", hint: "1440×900" },
-        { value: "desktop-xl", label: "desktop-xl", hint: "1920×1080" },
-        { value: "tablet", label: "tablet", hint: "768×1024 (iPad)" },
-        { value: "mobile", label: "mobile", hint: "390×844 (iPhone)" },
-      ];
-      const apply = (d) => { api.setSession({ device: d }); api.message(`device → ${d}`); };
-      if (!arg) return api.choose({ title: "Choose a device preset", items: devices, initial: api.session.device, onPick: apply });
-      const d = arg.trim().toLowerCase();
-      if (!devices.some((x) => x.value === d)) return api.error(`unknown device "${d}" — choose mobile, tablet, desktop, desktop-lg, or desktop-xl`);
-      apply(d);
-    } },
+  { name: "device", summary: "viewport preset for runs", comingSoon: "tuiDevice",
+    handler: (api) => api.message(comingSoon("tuiDevice")) },
   { name: "theme", args: "[name]", summary: "TUI color theme — opens a picker (or pass a name)",
     handler: async (api, arg) => {
       const { THEMES, THEME_NAMES } = await import("./themes.js");
@@ -98,18 +89,23 @@ export const COMMANDS = [
     } },
   { name: "full", summary: "toggle full-page glance",
     handler: (api) => { const v = !api.session.full; api.setSession({ full: v }); api.message(`full-page glance → ${v ? "on" : "off"}`); } },
-  { name: "success", args: "<text>", summary: "objective success marker (walkthrough)",
-    handler: (api, arg) => { const v = arg.trim() || null; api.setSession({ success: v }); api.message(v ? `success marker → "${v}"` : "success marker cleared"); } },
+  { name: "success", args: "<check>", summary: "objective pass/fail check: text, text:/re/, url:…, selector:… (walkthrough)",
+    handler: (api, arg) => {
+      const v = arg.trim() || null;
+      if (v) { try { parseSuccess(v); } catch (e) { return api.error(e.message); } }
+      api.setSession({ success: v });
+      api.message(v ? `success check → ${v}` : "success check cleared");
+    } },
   { name: "upload", args: "[files]", summary: "attach files (bare = whole uploads/ folder)",
     handler: (api, arg) => {
       const v = arg.trim() ? arg.trim() : true;
       api.setSession({ upload: v });
       api.message(typeof v === "string" ? `uploads → ${v}` : "uploads → entire uploads/ folder");
     } },
-  { name: "record", summary: "toggle video recording of the session",
-    handler: (api) => { const v = !api.session.record; api.setSession({ record: v }); api.message(`video recording → ${v ? "on" : "off"}`); } },
-  { name: "a11y", summary: "toggle accessibility audit (axe-core) on each page",
-    handler: (api) => { const v = !api.session.a11y; api.setSession({ a11y: v }); api.message(`accessibility audit → ${v ? "on" : "off"}`); } },
+  { name: "record", summary: "video recording of the session", comingSoon: "record",
+    handler: (api) => api.message(comingSoon("record")) },
+  { name: "a11y", summary: "accessibility audit (axe-core)", comingSoon: "a11y",
+    handler: (api) => api.message(comingSoon("a11y")) },
   { name: "export-format", args: "[format]", summary: "set export format: html | junit | json",
     handler: (api, arg) => {
       const formats = [

@@ -1,0 +1,8 @@
+<!doctype html><meta charset="utf-8"><title>Search</title>
+<main>
+  <input id="q" aria-label="Search docs" placeholder="Search…"
+    onkeydown="if (event.key === 'Enter') document.getElementById('out').textContent = 'Results for ' + this.value"
+    oninput="document.getElementById('keys').textContent = String(Number(document.getElementById('keys').textContent) + 1)">
+  <p id="out"></p>
+  <p>Key events: <span id="keys">0</span></p>
+</main>

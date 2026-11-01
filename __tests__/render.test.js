@@ -34,6 +34,13 @@ describe("describe (action)", () => {
   it("falls back to raw action for unknown", () => {
     expect(describeAction({ action: "unknown" })).toBe("unknown");
   });
+
+  it("describes the keyboard, dropdown, hover and back actions", () => {
+    expect(describeAction({ action: "select", target: 4, option: "Pro" })).toBe('select "Pro" in #4');
+    expect(describeAction({ action: "press", key: "Enter" })).toBe("press Enter");
+    expect(describeAction({ action: "hover", target: 2 })).toBe("hover #2");
+    expect(describeAction({ action: "back" })).toBe("go back");
+  });
 });
 
 describe("banner", () => {
@@ -102,6 +109,22 @@ describe("buildReport", () => {
     });
     expect(result).toContain("PASS");
     expect(result).toContain("/success");
+  });
+
+  it("reports tool failures and links findings to their evidence steps", () => {
+    const result = buildReport({
+      inputs: baseInputs,
+      outcome: "gave up / bounced",
+      finalUrl: "https://example.com",
+      assertion: null,
+      steps: [{ n: 2, shot: "step-2.png", thought: "t", action: "click #9", result: "[TOOL] No element #9 on the page." }],
+      reflection: "",
+      findings: { summary: "s", wouldCompleteTask: "no", findings: [{ severity: "high", issue: "Hidden CTA", steps: [2] }] },
+      toolFailures: 1,
+    });
+    expect(result).toContain("**Tool failures:** 1");
+    expect(result).toContain("Evidence: [step 2](step-2.png)");
+    expect(result).toContain("[with element numbers](step-2.marked.png)");
   });
 });
 
